@@ -8,6 +8,13 @@ let UNIT = '億元';
 const $ = (s) => document.querySelector(s);
 const fmt = (v, d = 2) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
 const fmtK = (v) => v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+// 價格 / 履約價：台指是四五位數整數，美股是三位數帶小數，小數位要跟著量級走
+const fmtP = (v) => v == null ? '—' : Math.abs(v) >= 10000
+  ? v.toLocaleString('en-US', { maximumFractionDigits: 0 })
+  : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// 座標軸刻度：不需要小數就不要印
+const fmtA = (v) => v.toLocaleString('en-US',
+  { maximumFractionDigits: Math.abs(v) >= 10000 ? 0 : (Number.isInteger(v) ? 0 : 1) });
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 const S = {                                      // UI 狀態
@@ -78,9 +85,13 @@ function applyMeta() {
   E = m.unit_div || 1e8;
   UNIT = m.unit || '億元';
   S.band = m.default_view_band || 0.20;
-  $('#selBand').value = String(S.band);
+  const sb = $('#selBand');                    // option 的字串與數值不一定字面相等，用數值比對
+  const opt = [...sb.options].find(o => Math.abs(parseFloat(o.value) - S.band) < 1e-9)
+           || [...sb.options].reduce((a, o) =>
+                Math.abs(parseFloat(o.value) - S.band) < Math.abs(parseFloat(a.value) - S.band) ? o : a);
+  sb.value = opt.value; S.band = parseFloat(opt.value);
   $('#mDate').textContent = m.trade_date;
-  $('#mSpot').textContent = fmtK(m.s_ref);
+  $('#mSpot').textContent = fmtP(m.s_ref);
   $('#mLegs').textContent = fmtK(m.n_legs);
   $('#mExp').textContent = m.n_expiries;
   $('#mOI').textContent = fmtK(m.oi_total);
@@ -226,7 +237,7 @@ function drawBars(host, rows, valueFn, colorFn, opts) {
   const kt = niceTicks(kMin, kMax, 6);
   for (const t of kt) {
     if (t < kMin - step || t > kMax + step) continue;
-    el('text', { class: 'ax', x: x(t), y: ih + 18, 'text-anchor': 'middle' }, g).textContent = fmtK(t);
+    el('text', { class: 'ax', x: x(t), y: ih + 18, 'text-anchor': 'middle' }, g).textContent = fmtA(t);
   }
 
   rows.forEach((r, i) => {
@@ -274,7 +285,7 @@ function drawCurve(host, cv, refs) {
   el('text', { class: 'axname', x: -m.l + 4, y: -m.t + 12 }, g).textContent = UNIT + ' / 1%';
   for (const t of niceTicks(xMin, xMax, 6)) {
     if (t < xMin || t > xMax) continue;
-    el('text', { class: 'ax', x: x(t), y: ih + 18, 'text-anchor': 'middle' }, g).textContent = fmtK(t);
+    el('text', { class: 'ax', x: x(t), y: ih + 18, 'text-anchor': 'middle' }, g).textContent = fmtA(t);
   }
 
   const path = (arr) => arr.map((v, i) => (i ? 'L' : 'M') + x(cv.x[i]).toFixed(1) + ' ' + y(v / E).toFixed(1)).join('');
@@ -304,7 +315,7 @@ function drawCurve(host, cv, refs) {
     cross.setAttribute('x1', xx); cross.setAttribute('x2', xx); cross.setAttribute('opacity', 1);
     d1.setAttribute('cx', xx); d1.setAttribute('cy', y(cv.gex[i] / E)); d1.setAttribute('opacity', 1);
     d2.setAttribute('cx', xx); d2.setAttribute('cy', y(cv.gexp[i] / E)); d2.setAttribute('opacity', 1);
-    showTip(ev, `<div class="t">標的 ${fmtK(cv.x[i])}（${((cv.x[i] / S.data.meta.s_ref - 1) * 100).toFixed(2)}%）</div>
+    showTip(ev, `<div class="t">標的 ${fmtP(cv.x[i])}（${((cv.x[i] / S.data.meta.s_ref - 1) * 100).toFixed(2)}%）</div>
       <div class="r"><span>GEX</span><span>${fmt(cv.gex[i] / E)}</span></div>
       <div class="r"><span>VEX</span><span>${fmt(cv.vex[i] / E)}</span></div>
       <div class="r"><span>GEX+（β=${S.beta.toFixed(1)}）</span><span>${fmt(cv.gexp[i] / E)}</span></div>`);
@@ -405,12 +416,12 @@ function drawSummary(rows, cv, flip, flipP) {
       <div class="s">${gTone}</div>
     </div>
     <div class="sumgrid">
-      <div class="tile"><div class="k">現貨 S</div><div class="v">${fmtK(S0)}</div><div class="s">${meta.s_ref_source}</div></div>
+      <div class="tile"><div class="k">現貨 S</div><div class="v">${fmtP(S0)}</div><div class="s">${meta.s_ref_source}</div></div>
       <div class="tile"><div class="k">Gamma Flip</div>
-        <div class="v" style="color:var(--flip)">${flip == null ? '—' : fmtK(Math.round(flip))}</div>
+        <div class="v" style="color:var(--flip)">${fmtP(flip)}</div>
         <div class="s">距現貨 ${dist(flip)}</div></div>
       <div class="tile"><div class="k">GEX+ Flip</div>
-        <div class="v" style="color:var(--flip2)">${flipP == null ? '—' : fmtK(Math.round(flipP))}</div>
+        <div class="v" style="color:var(--flip2)">${fmtP(flipP)}</div>
         <div class="s">距現貨 ${dist(flipP)}・β=${S.beta.toFixed(1)}</div></div>
       <div class="tile"><div class="k">總 VEX</div>
         <div class="v" style="font-size:17px;color:${totV >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(totV / E)}</div>
@@ -423,12 +434,12 @@ function drawSummary(rows, cv, flip, flipP) {
         <div class="s">${UNIT} / vol 點（部位損益）</div></div>
     </div>
     <div class="rowlist">
-      <div><span class="lbl">正 GEX 集中</span>${up.map(r => `<span class="chip p">${fmtK(r.K)} ${fmt(gexOf(r, sg) / E)}</span>`).join('') || '<span style="color:var(--ink3)">無</span>'}</div>
-      <div><span class="lbl">負 GEX 集中</span>${dn.map(r => `<span class="chip n">${fmtK(r.K)} ${fmt(gexOf(r, sg) / E)}</span>`).join('') || '<span style="color:var(--ink3)">無</span>'}</div>
-      <div><span class="lbl">負 VEX 集中</span>${vn.map(r => `<span class="chip n">${fmtK(r.K)} ${fmt(vexOf(r, sg) / E)}</span>`).join('') || '<span style="color:var(--ink3)">無</span>'}</div>
+      <div><span class="lbl">正 GEX 集中</span>${up.map(r => `<span class="chip p">${fmtP(r.K)} ${fmt(gexOf(r, sg) / E)}</span>`).join('') || '<span style="color:var(--ink3)">無</span>'}</div>
+      <div><span class="lbl">負 GEX 集中</span>${dn.map(r => `<span class="chip n">${fmtP(r.K)} ${fmt(gexOf(r, sg) / E)}</span>`).join('') || '<span style="color:var(--ink3)">無</span>'}</div>
+      <div><span class="lbl">負 VEX 集中</span>${vn.map(r => `<span class="chip n">${fmtP(r.K)} ${fmt(vexOf(r, sg) / E)}</span>`).join('') || '<span style="color:var(--ink3)">無</span>'}</div>
       <div><span class="lbl">未平倉牆</span>
-        <span class="chip">Call ${cw ? fmtK(cw.K) : '—'}・${cw ? fmtK(cw.oc) : 0} 口</span>
-        <span class="chip">Put ${pw ? fmtK(pw.K) : '—'}・${pw ? fmtK(pw.op) : 0} 口</span>
+        <span class="chip">Call ${cw ? fmtP(cw.K) : '—'}・${cw ? fmtK(cw.oc) : 0} 口</span>
+        <span class="chip">Put ${pw ? fmtP(pw.K) : '—'}・${pw ? fmtK(pw.op) : 0} 口</span>
         <span style="color:var(--ink3);font-size:11.5px">P/C = ${(v.oi_p / Math.max(v.oi_c, 1)).toFixed(2)}</span></div>
       <div style="color:var(--ink3);font-size:11.5px;margin-top:6px">
         ${vTone}。輸出範圍（±${(tr.band_pct * 100).toFixed(0)}%）外還有 ${tr.n_strikes_dropped} 個履約價、${fmtK(tr.oi_outside)} 口未平倉，
@@ -443,7 +454,7 @@ function drawTable(rows) {
     `<tr><th>履約價</th><th>GEX（${UNIT}/1%）</th><th>VEX（${UNIT}/vol點）</th><th>vega 曝險</th>` +
     '<th>Call OI</th><th>Put OI</th><th>ΔCall OI</th><th>ΔPut OI</th><th>隱含波動率</th></tr>';
   $('#tbl').querySelector('tbody').innerHTML = rows.map(r => `<tr>
-    <td>${fmtK(r.K)}</td>
+    <td>${fmtP(r.K)}</td>
     <td style="color:${gexOf(r, sg) >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(gexOf(r, sg) / E)}</td>
     <td style="color:${vexOf(r, sg) >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(vexOf(r, sg) / E, 3)}</td>
     <td style="color:var(--ink2)">${fmt(vegaOf(r, sg) / E, 3)}</td>
@@ -460,7 +471,7 @@ function drawExpTable() {
   const sg = SIGNS[S.sign];
   $('#tblExp').querySelector('tbody').innerHTML = S.data.expiries.map(e => `<tr>
     <td>${e.code}</td><td>${e.kind}</td><td>${e.ltd}</td><td>${e.trading_days}</td>
-    <td>${fmtK(e.F)}</td><td>${e.atm_iv == null ? '—' : (e.atm_iv * 100).toFixed(2) + '%'}</td>
+    <td>${fmtP(e.F)}</td><td>${e.atm_iv == null ? '—' : (e.atm_iv * 100).toFixed(2) + '%'}</td>
     <td>${e.skew.toFixed(3)}</td><td>${fmtK(e.oi)}</td>
     <td>${fmt(gexOf(e.totals, sg) / E)}</td><td>${fmt(vexOf(e.totals, sg) / E)}</td></tr>`).join('');
 }
@@ -476,9 +487,9 @@ function render() {
   const flipP = crossings(cvFull.x, cvFull.gexp, S0);
 
   const refs = [
-    { v: S0, color: 'var(--spot)', dash: '6 4', label: '現貨 ' + fmtK(S0) },
-    { v: flip, color: 'var(--flip)', dash: '2 4', label: 'Gamma Flip ' + (flip == null ? '' : fmtK(Math.round(flip))) },
-    { v: flipP, color: 'var(--flip2)', dash: '2 4', label: 'GEX+ Flip ' + (flipP == null ? '' : fmtK(Math.round(flipP))) },
+    { v: S0, color: 'var(--spot)', dash: '6 4', label: '現貨 ' + fmtP(S0) },
+    { v: flip, color: 'var(--flip)', dash: '2 4', label: 'Gamma Flip ' + (flip == null ? '' : fmtP(flip)) },
+    { v: flipP, color: 'var(--flip2)', dash: '2 4', label: 'GEX+ Flip ' + (flipP == null ? '' : fmtP(flipP)) },
   ];
 
   $('#lgGex').innerHTML =
@@ -501,8 +512,8 @@ function render() {
   drawBars($('#chGex'), rows, r => gexOf(r, sg) / E,
     (r, v) => v >= 0 ? 'var(--pos)' : 'var(--neg)',
     {
-      yLabel: '億元 / 1%', refs, step,
-      tip: (r, v) => `<div class="t">履約價 ${fmtK(r.K)}</div>
+      yLabel: UNIT + ' / 1%', refs, step,
+      tip: (r, v) => `<div class="t">履約價 ${fmtP(r.K)}</div>
         <div class="r"><span>GEX</span><span>${fmt(v)} ${UNIT} / 1%</span></div>
         <div class="r"><span>VEX</span><span>${fmt(vexOf(r, sg) / E, 3)} ${UNIT} / vol 點</span></div>
         <div class="r"><span>Call OI</span><span>${fmtK(r.oc)}（${r.dc >= 0 ? '+' : '−'}${fmtK(Math.abs(r.dc))}）</span></div>
@@ -513,8 +524,8 @@ function render() {
   drawBars($('#chVex'), rows, r => vexOf(r, sg) / E,
     (r, v) => v >= 0 ? 'var(--pos)' : 'var(--neg)',
     {
-      yLabel: '億元 / vol 點', refs: [refs[0], refs[1]], step,
-      tip: (r, v) => `<div class="t">履約價 ${fmtK(r.K)}</div>
+      yLabel: UNIT + ' / vol 點', refs: [refs[0], refs[1]], step,
+      tip: (r, v) => `<div class="t">履約價 ${fmtP(r.K)}</div>
         <div class="r"><span>VEX（vanna）</span><span>${fmt(v, 3)} ${UNIT} / vol 點</span></div>
         <div class="r"><span>vega 曝險</span><span>${fmt(vegaOf(r, sg) / E, 3)} ${UNIT} / vol 點</span></div>
         <div class="r"><span>Call / Put OI</span><span>${fmtK(r.oc)} / ${fmtK(r.op)}</span></div>`,
