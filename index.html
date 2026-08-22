@@ -105,6 +105,7 @@ tbody tr:hover{background:#141d29}
 .meth h3{font-size:13px;color:var(--ink);margin:14px 0 4px}
 .warn{border-left:3px solid var(--flip);padding-left:11px;margin:10px 0}
 #err{display:none;background:#2a1416;border:1px solid #5c2b2f;border-radius:10px;padding:14px 16px;color:#f0c9c9}
+.notice{background:#241c0c;border:1px solid #5c4a1f;border-radius:10px;padding:11px 14px;color:#e8d5a6;font-size:12.5px;line-height:1.7;margin-bottom:14px}
 </style>
 </head>
 <body>
@@ -118,6 +119,7 @@ tbody tr:hover{background:#141d29}
   <div class="src" id="mSrc">—</div>
 
   <div id="err"></div>
+  <div id="dateWarn" class="notice" style="display:none"></div>
 
   <div class="controls">
     <div class="ctl" id="ctlDate" style="display:none"><label>資料日期</label>

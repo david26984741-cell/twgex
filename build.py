@@ -28,6 +28,10 @@ import engine
 import symbols as symcfg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def fmt_date(s):
+    return f"{s[:4]}/{s[4:6]}/{s[6:8]}" if s and len(s) == 8 else None
 DATA = os.path.join(HERE, "data")
 CURVE_N = 241
 CURVE_SPAN = 0.12
@@ -167,9 +171,16 @@ def load_us(args, sym):
     import symbols as _sc
     payload = cboe.read_json_file(args.json) if args.json else cboe.fetch_json(sym)
     hol = engine.load_holidays(os.path.join(HERE, _sc.SPECS[sym]["calendar"]))
-    forced = args.date or (None if args.json else us_last_session(hol))
+    session = args.date or (None if args.json else us_last_session(hol))
+    # 未平倉量可能還沒跟上（OCC 隔一個營業日才發布），用資料本身推斷它是哪一天的
+    price_day = (payload.get("data", {}).get("last_trade_time") or "")[:10].replace("-", "")
+    oi_day = cboe.oi_as_of(payload, price_day or session or "99999999")
+    forced = oi_day or session
     chain_all, meta = cboe.parse_chain(payload, forced)
     day = forced or meta["trade_day"]
+    if oi_day and price_day and oi_day < price_day:
+        print(f"  註：未平倉量為 {oi_day} 收盤（OCC 尚未發布 {price_day}），"
+              f"報價為 {price_day} 收盤，本檔以未平倉日為準標示。", file=sys.stderr)
     if not day:
         raise SystemExit("CBOE 回傳裡找不到交易日")
     chain = {e: chain_all[e] for e in cboe.live_expiries(chain_all, day)}
@@ -185,7 +196,8 @@ def load_us(args, sym):
                 prev_oi[("*", r["K"], "C")] = r["oc"]
                 prev_oi[("*", r["K"], "P")] = r["op"]
     extra = {"quote_time": meta.get("quote_time"), "snapshot": meta.get("snapshot"),
-             "iv30": meta.get("iv30"), "n_contracts_all": meta.get("n_contracts_all")}
+             "iv30": meta.get("iv30"), "n_contracts_all": meta.get("n_contracts_all"),
+             "oi_as_of": fmt_date(oi_day), "price_as_of": fmt_date(price_day)}
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 

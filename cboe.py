@@ -67,6 +67,35 @@ def _mid(bid, ask, last) -> Optional[float]:
     return None
 
 
+def oi_as_of(payload: dict, today: str) -> Optional[str]:
+    """從資料本身推斷「這批未平倉量是哪一天收盤的」。
+
+    做法: 找出已經到期、但序列上還掛著未平倉的最晚到期日 E。
+    未平倉量如果已經反映 E 當天的到期處理，E 的未平倉會歸零；
+    既然還在，代表這批 OI 是 E 到期之前的，也就是 E 的前一個交易日收盤。
+
+    OCC 每個營業日早上才發布前一個營業日的未平倉量，所以盤後立刻抓會慢一天，
+    這個函式就是用來把那一天標對，不要拿舊 OI 冒充今天。
+    """
+    d = payload.get("data") or {}
+    expired = {}
+    for o in d.get("options") or []:
+        code = o.get("option") or ""
+        if len(code) < 16:
+            continue
+        exp = "20" + code[-15:-9]
+        if exp <= today and (o.get("open_interest") or 0) > 0:
+            expired[exp] = expired.get(exp, 0) + int(o["open_interest"])
+    if not expired:
+        return None
+    latest = max(expired)
+    y, m, dd = int(latest[:4]), int(latest[4:6]), int(latest[6:8])
+    d0 = dt.date(y, m, dd) - dt.timedelta(days=1)
+    while d0.weekday() >= 5:
+        d0 -= dt.timedelta(days=1)
+    return d0.strftime("%Y%m%d")
+
+
 def parse_chain(payload: dict, trade_day: Optional[str] = None) -> Tuple[Dict[str, dict], dict]:
     """回傳 (chain, meta)。chain 的結構跟 taifex.parse_options 的單日區塊一致，
     可以直接餵給 engine.build_legs。
@@ -103,6 +132,7 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None) -> Tuple[Dict[st
         n_used += 1
 
     meta = {"symbol": d.get("symbol"), "spot": spot, "trade_day": day,
+            "price_day": (d.get("last_trade_time") or "")[:10].replace("-", ""),
             "quote_time": d.get("last_trade_time"), "snapshot": payload.get("timestamp"),
             "iv30": d.get("iv30"), "n_contracts_all": n_all, "n_contracts_used": n_used}
     return chain, meta

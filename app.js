@@ -87,6 +87,14 @@ function applyMeta() {
   $('#mCov').textContent = (m.oi_coverage * 100).toFixed(1) + '%';
   $('#mSrc').textContent = m.source + '　・　' + m.price_note + '　・　產生於 ' + m.generated_at +
     (m.prev_trade_date ? '　・　OI 增減對比 ' + m.prev_trade_date : '');
+  // 未平倉日與報價日不一致時要講出來（美股常見：OCC 隔一個營業日才發布未平倉量）
+  const warn = $('#dateWarn');
+  if (m.oi_as_of && m.price_as_of && m.oi_as_of !== m.price_as_of) {
+    warn.style.display = '';
+    warn.innerHTML = `<b>未平倉量與報價不同日：</b>未平倉量為 <b>${m.oi_as_of}</b> 收盤，` +
+      `報價為 <b>${m.price_as_of}</b> 收盤。本頁以未平倉日標示，隱含波動率則來自較新的那組報價。` +
+      `（OCC 每個營業日早上才發布前一日的未平倉量，排程若在發布前跑就會出現這個情況。）`;
+  } else { warn.style.display = 'none'; }
   $('#nGex').textContent = UNIT + ' / 標的移動 1%';
   $('#nVex').textContent = 'vanna 曝險・' + UNIT + ' / 波動率 1 點';
   document.title = `${m.label} 選擇權曝險地圖`;
