@@ -1,0 +1,77 @@
+name: 每日更新曝險地圖
+
+on:
+  schedule:
+    # 台北 15:40 / 17:40（UTC+8）：台指。第二次是保險，期交所偶爾延遲公布。
+    - cron: '40 7 * * 1-5'
+    - cron: '40 9 * * 1-5'
+    # 美東 09:20（開盤前）：抓前一個交易日。此時 OCC 已把未平倉量更新完，
+    # CBOE 的報價也還停在前一個收盤，兩邊指的是同一天。週二到週六對應週一到週五的 session。
+    - cron: '20 13 * * 2-6'
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: '要更新的標的（空白 = 全部）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gexmap-daily
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 不變量自我測試（數學層）
+        run: python selftest.py
+
+      - name: 決定要跑哪些標的
+        id: pick
+        run: |
+          if [ -n "${{ github.event.inputs.symbols }}" ]; then
+            SYMS="${{ github.event.inputs.symbols }}"
+          elif [ "${{ github.event.schedule }}" = "20 13 * * 2-6" ]; then
+            SYMS="SPY QQQ"
+          elif [ -n "${{ github.event.schedule }}" ]; then
+            SYMS="TXO"
+          else
+            SYMS="TXO SPY QQQ"
+          fi
+          echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
+          echo "要更新：$SYMS"
+
+      - name: 產生資料
+        run: |
+          fail=0
+          for s in ${{ steps.pick.outputs.syms }}; do
+            echo "::group::$s"
+            if python build.py --symbol "$s"; then :; else
+              echo "::warning::$s 更新失敗（來源可能暫時不可用）"; fail=1
+            fi
+            echo "::endgroup::"
+          done
+          if [ "$fail" = "1" ] && git diff --quiet -- data/; then
+            echo "::error::全部標的都失敗且沒有任何資料變動"; exit 1
+          fi
+
+      - name: 提交
+        run: |
+          if git diff --quiet -- data/; then
+            echo "資料沒有變動（假日或來源尚未更新），跳過提交。"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -m "曝險地圖更新 $(date -u +%Y-%m-%d)"
+          git push
