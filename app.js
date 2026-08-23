@@ -16,9 +16,13 @@ const fmtP = (v) => v == null ? '—' : Math.abs(v) >= 10000
 const fmtA = (v) => v.toLocaleString('en-US',
   { maximumFractionDigits: Math.abs(v) >= 10000 ? 0 : (Number.isInteger(v) ? 0 : 1) });
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// 字級倍率（CSS 變數 --fs），圖表的邊界與高度要跟著它走，不然標籤會擠在一起
+const fsScale = () => parseFloat(getComputedStyle(document.documentElement)
+  .getPropertyValue('--fs')) || 1;
+const isNarrow = () => innerWidth < 760;
 
 const S = {                                      // UI 狀態
-  data: null, sym: null, exp: 'ALL', band: 0.20, bucket: 1,
+  data: null, sym: null, exp: 'ALL', band: 0.20, bucket: null,
   sign: 'net', beta: 1.0, cvd: 0,
 };
 
@@ -90,6 +94,7 @@ function applyMeta() {
            || [...sb.options].reduce((a, o) =>
                 Math.abs(parseFloat(o.value) - S.band) < Math.abs(parseFloat(a.value) - S.band) ? o : a);
   sb.value = opt.value; S.band = parseFloat(opt.value);
+  mountBuckets();
   $('#mDate').textContent = m.trade_date;
   $('#mSpot').textContent = fmtP(m.s_ref);
   $('#mLegs').textContent = fmtK(m.n_legs);
@@ -122,7 +127,7 @@ function buckets() {
   const m = new Map();
   for (const r of v.strikes) {
     if (r.K < lo || r.K > hi) continue;
-    const k = b > 1 ? Math.round(r.K / b) * b : r.K;
+    const k = b > 0 ? +(Math.round(r.K / b) * b).toFixed(4) : r.K;
     let a = m.get(k);
     if (!a) m.set(k, a = { K: k, gc: 0, gp: 0, wc: 0, wp: 0, vc: 0, vp: 0,
                            oc: 0, op: 0, dc: 0, dp: 0, ivn: 0, ivd: 0 });
@@ -137,10 +142,33 @@ function buckets() {
 
 // 分桶後的網格間距（原始履約價時取相鄰履約價的最小間距，長條寬度要用）
 function gridStep(rows) {
-  if (S.bucket > 1) return S.bucket;
+  if (S.bucket > 0) return S.bucket;
   let d = Infinity;
   for (let i = 1; i < rows.length; i++) d = Math.min(d, rows[i].K - rows[i - 1].K);
   return isFinite(d) && d > 0 ? d : 50;
+}
+
+// 原生履約價間距（台指 50 點、美股 0.5~5 元），分桶選項由它推出來
+function nativeStep() {
+  const ks = view().strikes.map(r => r.K).sort((a, b) => a - b);
+  let d = Infinity;
+  for (let i = 1; i < ks.length; i++) { const g = ks[i] - ks[i - 1]; if (g > 1e-9) d = Math.min(d, g); }
+  return isFinite(d) && d > 0 ? d : 50;
+}
+
+function mountBuckets() {
+  const g = nativeStep(), sel = $('#selBucket');
+  const opts = [[0, '原始履約價']].concat([2, 4, 10].map(k => {
+    const v = +(g * k).toFixed(4);
+    return [v, `每 ${v >= 1 ? fmtK(v) : v} ${S.data.meta.symbol === 'TXO' ? '點' : ''}`.trim()];
+  }));
+  // 手機上原始履約價會擠成一片，預設挑一個讓長條數量落在 100 根以內的分桶
+  if (S.bucket == null || !opts.some(o => o[0] === S.bucket)) {
+    const span = S.data.meta.s_ref * S.band * 2;
+    S.bucket = isNarrow() ? (opts.find(o => o[0] > 0 && span / o[0] <= 100) || opts[1])[0] : 0;
+  }
+  sel.innerHTML = opts.map(([v, t]) =>
+    `<option value="${v}"${v === S.bucket ? ' selected' : ''}>${t}</option>`).join('');
 }
 
 function curve(clip) {
@@ -198,19 +226,39 @@ function niceTicks(lo, hi, n = 5) {
 
 /* --------------------------------------------------------- tooltip */
 const tip = $('#tip');
+let tipTimer, lastTouch = 0;
+const stampTouch = () => { lastTouch = Date.now(); };
+addEventListener('touchstart', stampTouch, { passive: true, capture: true });
+addEventListener('touchmove', stampTouch, { passive: true, capture: true });
+addEventListener('touchend', stampTouch, { passive: true, capture: true });
+const justTouched = () => Date.now() - lastTouch < 900;
 function showTip(ev, html) {
   tip.innerHTML = html; tip.style.opacity = 1;
   const r = tip.getBoundingClientRect();
-  tip.style.left = clamp(ev.clientX + 14, 8, innerWidth - r.width - 8) + 'px';
-  tip.style.top = clamp(ev.clientY - r.height - 12, 8, innerHeight - r.height - 8) + 'px';
+  const x = ev.clientX != null ? ev.clientX : (ev.touches && ev.touches[0] ? ev.touches[0].clientX : 0);
+  const y = ev.clientY != null ? ev.clientY : (ev.touches && ev.touches[0] ? ev.touches[0].clientY : 0);
+  tip.style.left = clamp(x + 14, 8, Math.max(8, innerWidth - r.width - 8)) + 'px';
+  tip.style.top = clamp(y - r.height - 14, 8, Math.max(8, innerHeight - r.height - 8)) + 'px';
+  // 觸控沒有 mouseleave，自己收掉
+  clearTimeout(tipTimer);
+  tipShownAt = Date.now();
+  // 觸控事件本身、以及觸控後瀏覽器補送的相容滑鼠事件（mouseenter/mousemove），都要排自動關閉
+  const byTouch = ev.pointerType === 'touch' || (ev.type || '').startsWith('touch') || justTouched();
+  if (byTouch) tipTimer = setTimeout(hideTip, 3500);
 }
-const hideTip = () => { tip.style.opacity = 0; };
+const hideTip = () => { clearTimeout(tipTimer); tip.style.opacity = 0; };
+let tipShownAt = 0;
+// 捲動時收掉 tooltip；但點觸的當下常常伴隨一次微小捲動，剛顯示的那 500ms 不理它
+addEventListener('scroll', () => { if (Date.now() - tipShownAt > 500) hideTip(); }, { passive: true });
 
 /* --------------------------------------------------------- 長條圖 */
 function drawBars(host, rows, valueFn, colorFn, opts) {
   host.innerHTML = '';
-  const W = Math.max(host.clientWidth || 640, 320), H = opts.h || 268;
-  const m = { t: 48, r: 14, b: 30, l: 58 };          // 上緣留給參考線標籤
+  const F = fsScale(), nar = isNarrow();
+  const W = Math.max(host.clientWidth || 640, 260);
+  const H = Math.round((opts.h || 268) * (nar ? 0.92 : 1) * (1 + (F - 1) * 0.4));
+  const m = { t: Math.round(46 * F), r: Math.round(10 * F),   // 上緣留給參考線標籤
+              b: Math.round(28 * F), l: Math.round((nar ? 44 : 56) * F) };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img' }, host);
   const g = el('g', { transform: `translate(${m.l},${m.t})` }, svg);
@@ -225,19 +273,19 @@ function drawBars(host, rows, valueFn, colorFn, opts) {
   const y = v => ih - ((v - lo) / (hi - lo)) * ih;
   const bw = Math.max(1, iw / ((kMax - kMin) / step + 1) - 2);   // 2px 表面間隙
 
-  const yT = niceTicks(lo, hi, 5);
+  const yT = niceTicks(lo, hi, nar ? 4 : 5);
   for (const t of yT) {
     const yy = y(t);
     el('line', { class: 'gl', x1: 0, x2: iw, y1: yy, y2: yy }, g);
     el('text', { class: 'ax', x: -8, y: yy + 3.5, 'text-anchor': 'end' }, g).textContent = t.toFixed(yT.dp);
   }
   el('line', { class: 'zero', x1: 0, x2: iw, y1: y(0), y2: y(0) }, g);
-  el('text', { class: 'axname', x: -m.l + 4, y: -m.t + 12 }, g).textContent = opts.yLabel;
+  el('text', { class: 'axname', x: -m.l + 4, y: -m.t + 12 * F }, g).textContent = opts.yLabel;
 
-  const kt = niceTicks(kMin, kMax, 6);
+  const kt = niceTicks(kMin, kMax, nar ? 3 : 6);
   for (const t of kt) {
     if (t < kMin - step || t > kMax + step) continue;
-    el('text', { class: 'ax', x: x(t), y: ih + 18, 'text-anchor': 'middle' }, g).textContent = fmtA(t);
+    el('text', { class: 'ax', x: x(t), y: ih + 18 * F, 'text-anchor': 'middle' }, g).textContent = fmtA(t);
   }
 
   rows.forEach((r, i) => {
@@ -246,15 +294,19 @@ function drawBars(host, rows, valueFn, colorFn, opts) {
     const hit = el('rect', { x: xx - 1, y: 0, width: bw + 2, height: ih, fill: 'transparent' }, g);
     const on = (ev) => { p.setAttribute('opacity', .72); showTip(ev, opts.tip(r, v)); };
     hit.addEventListener('mouseenter', on); hit.addEventListener('mousemove', on);
-    hit.addEventListener('mouseleave', () => { p.removeAttribute('opacity'); hideTip(); });
+    hit.addEventListener('touchstart', on, { passive: true });
+    hit.addEventListener('mouseleave', () => {
+      if (justTouched()) return;                 // 觸控後補送的滑鼠事件不要把 tooltip 關掉
+      p.removeAttribute('opacity'); hideTip();
+    });
   });
 
   (opts.refs || []).forEach((rf, i) => {
     if (rf.v == null || rf.v < kMin - step || rf.v > kMax + step) return;
     const xx = x(rf.v);
     el('line', { x1: xx, x2: xx, y1: -m.t + 6, y2: ih, stroke: rf.color, 'stroke-width': 2, 'stroke-dasharray': rf.dash }, g);
-    const at = xx > iw - 96;                       // 靠右邊界就把標籤翻到左側
-    el('text', { class: 'ax', x: xx + (at ? -5 : 5), y: -m.t + 15 + i * 12, fill: rf.color,
+    const at = xx > iw - (nar ? 70 : 96) * F;      // 靠右邊界就把標籤翻到左側
+    el('text', { class: 'ax', x: xx + (at ? -5 : 5), y: -m.t + (15 + i * 12.5) * F, fill: rf.color,
                  'text-anchor': at ? 'end' : 'start' }, g).textContent = rf.label;
   });
 }
@@ -262,8 +314,11 @@ function drawBars(host, rows, valueFn, colorFn, opts) {
 /* --------------------------------------------------------- 折線圖 */
 function drawCurve(host, cv, refs) {
   host.innerHTML = '';
-  const W = Math.max(host.clientWidth || 640, 320), H = 268;
-  const m = { t: 48, r: 14, b: 30, l: 58 };
+  const F = fsScale(), nar = isNarrow();
+  const W = Math.max(host.clientWidth || 640, 260);
+  const H = Math.round(268 * (nar ? 0.92 : 1) * (1 + (F - 1) * 0.4));
+  const m = { t: Math.round(46 * F), r: Math.round(10 * F),
+              b: Math.round(28 * F), l: Math.round((nar ? 44 : 56) * F) };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img' }, host);
   const g = el('g', { transform: `translate(${m.l},${m.t})` }, svg);
@@ -275,17 +330,17 @@ function drawCurve(host, cv, refs) {
   const x = v => ((v - xMin) / (xMax - xMin)) * iw;
   const y = v => ih - ((v - lo) / (hi - lo)) * ih;
 
-  const yT = niceTicks(lo, hi, 5);
+  const yT = niceTicks(lo, hi, nar ? 4 : 5);
   for (const t of yT) {
     const yy = y(t);
     el('line', { class: 'gl', x1: 0, x2: iw, y1: yy, y2: yy }, g);
     el('text', { class: 'ax', x: -8, y: yy + 3.5, 'text-anchor': 'end' }, g).textContent = t.toFixed(yT.dp);
   }
   el('line', { class: 'zero', x1: 0, x2: iw, y1: y(0), y2: y(0) }, g);
-  el('text', { class: 'axname', x: -m.l + 4, y: -m.t + 12 }, g).textContent = UNIT + ' / 1%';
-  for (const t of niceTicks(xMin, xMax, 6)) {
+  el('text', { class: 'axname', x: -m.l + 4, y: -m.t + 12 * F }, g).textContent = UNIT + ' / 1%';
+  for (const t of niceTicks(xMin, xMax, nar ? 3 : 6)) {
     if (t < xMin || t > xMax) continue;
-    el('text', { class: 'ax', x: x(t), y: ih + 18, 'text-anchor': 'middle' }, g).textContent = fmtA(t);
+    el('text', { class: 'ax', x: x(t), y: ih + 18 * F, 'text-anchor': 'middle' }, g).textContent = fmtA(t);
   }
 
   const path = (arr) => arr.map((v, i) => (i ? 'L' : 'M') + x(cv.x[i]).toFixed(1) + ' ' + y(v / E).toFixed(1)).join('');
@@ -294,9 +349,9 @@ function drawCurve(host, cv, refs) {
 
   refs.forEach((rf, i) => {
     if (rf.v == null || rf.v < xMin || rf.v > xMax) return;
-    const xx = x(rf.v), at = xx > iw - 96;
+    const xx = x(rf.v), at = xx > iw - (nar ? 70 : 96) * F;
     el('line', { x1: xx, x2: xx, y1: -m.t + 6, y2: ih, stroke: rf.color, 'stroke-width': 2, 'stroke-dasharray': rf.dash }, g);
-    el('text', { class: 'ax', x: xx + (at ? -5 : 5), y: -m.t + 15 + i * 12, fill: rf.color,
+    el('text', { class: 'ax', x: xx + (at ? -5 : 5), y: -m.t + (15 + i * 12.5) * F, fill: rf.color,
                  'text-anchor': at ? 'end' : 'start' }, g).textContent = rf.label;
   });
 
@@ -305,7 +360,7 @@ function drawCurve(host, cv, refs) {
   const d1 = el('circle', { r: 4.5, fill: 'var(--curve1)', stroke: 'var(--surface)', 'stroke-width': 2, opacity: 0 }, g);
   const d2 = el('circle', { r: 4.5, fill: 'var(--curve2)', stroke: 'var(--surface)', 'stroke-width': 2, opacity: 0 }, g);
   const hit = el('rect', { x: 0, y: 0, width: iw, height: ih, fill: 'transparent' }, g);
-  hit.addEventListener('mousemove', (ev) => {
+  const onMove = (ev) => {
     const bb = svg.getBoundingClientRect();
     const px = (ev.clientX - bb.left) * (W / bb.width) - m.l;
     const sv = xMin + (px / iw) * (xMax - xMin);
@@ -319,8 +374,12 @@ function drawCurve(host, cv, refs) {
       <div class="r"><span>GEX</span><span>${fmt(cv.gex[i] / E)}</span></div>
       <div class="r"><span>VEX</span><span>${fmt(cv.vex[i] / E)}</span></div>
       <div class="r"><span>GEX+（β=${S.beta.toFixed(1)}）</span><span>${fmt(cv.gexp[i] / E)}</span></div>`);
-  });
+  };
+  hit.addEventListener('mousemove', onMove);
+  hit.addEventListener('touchstart', (e) => onMove(e.touches[0] || e), { passive: true });
+  hit.addEventListener('touchmove', (e) => onMove(e.touches[0] || e), { passive: true });
   hit.addEventListener('mouseleave', () => {
+    if (justTouched()) return;
     cross.setAttribute('opacity', 0); d1.setAttribute('opacity', 0); d2.setAttribute('opacity', 0); hideTip();
   });
 }
@@ -330,8 +389,11 @@ function drawCurve(host, cv, refs) {
 function drawExpiry(host) {
   host.innerHTML = '';
   const sg = SIGNS[S.sign], exps = S.data.expiries;
-  const W = Math.max(host.clientWidth || 900, 320), H = 250;
-  const m = { t: 18, r: 14, b: 56, l: 58 };
+  const F = fsScale(), nar = isNarrow();
+  const W = Math.max(host.clientWidth || 900, 260);
+  const H = Math.round(250 * (1 + (F - 1) * 0.4));
+  const m = { t: Math.round(18 * F), r: Math.round(10 * F),
+              b: Math.round((nar ? 62 : 56) * F), l: Math.round((nar ? 44 : 56) * F) };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img' }, host);
   const g = el('g', { transform: `translate(${m.l},${m.t})` }, svg);
@@ -347,7 +409,7 @@ function drawExpiry(host) {
   const cw = iw / rows.length;
   const bw = Math.max(6, cw * 0.55);
 
-  const yT = niceTicks(lo, hi, 5);
+  const yT = niceTicks(lo, hi, nar ? 4 : 5);
   for (const t of yT) {
     const yy = y(t);
     el('line', { class: 'gl', x1: 0, x2: iw, y1: yy, y2: yy }, g);
@@ -372,9 +434,13 @@ function drawExpiry(host) {
         <div class="r"><span>ATM 隱含波動率</span><span>${r.atm_iv == null ? '—' : (r.atm_iv * 100).toFixed(2) + '%'}</span></div>`);
     };
     hit.addEventListener('mouseenter', on); hit.addEventListener('mousemove', on);
-    hit.addEventListener('mouseleave', () => { p.removeAttribute('opacity'); hideTip(); });
-    const tx = el('text', { class: 'ax', x: cx, y: ih + 16, 'text-anchor': 'end',
-                            transform: `rotate(-38 ${cx} ${ih + 16})` }, g);
+    hit.addEventListener('touchstart', on, { passive: true });
+    hit.addEventListener('mouseleave', () => {
+      if (justTouched()) return;
+      p.removeAttribute('opacity'); hideTip();
+    });
+    const tx = el('text', { class: 'ax', x: cx, y: ih + 16 * F, 'text-anchor': 'end',
+                            transform: `rotate(-38 ${cx} ${ih + 16 * F})` }, g);
     tx.textContent = r.ltd;
   });
 
@@ -492,22 +558,18 @@ function render() {
     { v: flipP, color: 'var(--flip2)', dash: '2 4', label: 'GEX+ Flip ' + (flipP == null ? '' : fmtP(flipP)) },
   ];
 
-  $('#lgGex').innerHTML =
-    `<span style="color:var(--pos)"><i style="background:currentColor"></i></span><span>正 GEX（穩定 / 壓回）</span>
-     <span style="color:var(--neg)"><i style="background:currentColor"></i></span><span>負 GEX（放大 / 追價）</span>
-     <span style="color:var(--spot)"><i class="d"></i></span><span>現貨</span>
-     <span style="color:var(--flip)"><i class="d"></i></span><span>Gamma Flip</span>`;
-  $('#lgVex').innerHTML =
-    `<span style="color:var(--neg)"><i style="background:currentColor"></i></span><span>負 VEX（波動上升 → 造市商賣出 → 放大）</span>
-     <span style="color:var(--pos)"><i style="background:currentColor"></i></span><span>正 VEX</span>
-     <span style="color:var(--spot)"><i class="d"></i></span><span>現貨</span>`;
-  $('#lgCurve').innerHTML =
-    `<span style="color:var(--curve1)"><i style="background:currentColor"></i></span><span>GEX</span>
-     <span style="color:var(--curve2)"><i style="background:currentColor"></i></span><span>GEX+（β=${S.beta.toFixed(1)}）</span>
-     <span style="color:var(--spot)"><i class="d"></i></span><span>現貨</span>`;
-  $('#lgExp').innerHTML =
-    `<span style="color:var(--pos)"><i style="background:currentColor"></i></span><span>GEX（長條）</span>
-     <span style="color:var(--curve2)"><i style="background:currentColor"></i></span><span>GEX+（折線，β=${S.beta.toFixed(1)}）</span>`;
+  // 圖例：色塊與文字包在同一個 span，換行時不會被拆開
+  const lgi = (color, text, dash) =>
+    `<span class="it"><i class="${dash ? 'd' : ''}" style="${dash ? 'border-top-color' : 'background'}:${color}"></i>${text}</span>`;
+  const lg = (host, items) => { $(host).innerHTML = items.map(a => lgi(a[0], a[1], a[2])).join(''); };
+
+  lg('#lgGex', [['var(--pos)', '正 GEX（穩定 / 壓回）'], ['var(--neg)', '負 GEX（放大 / 追價）'],
+                ['var(--spot)', '現貨', 1], ['var(--flip)', 'Gamma Flip', 1]]);
+  lg('#lgVex', [['var(--neg)', '負 VEX（波動上升 → 造市商賣出 → 放大）'], ['var(--pos)', '正 VEX'],
+                ['var(--spot)', '現貨', 1]]);
+  lg('#lgCurve', [['var(--curve1)', 'GEX'], ['var(--curve2)', `GEX+（β=${S.beta.toFixed(1)}）`],
+                  ['var(--spot)', '現貨', 1]]);
+  lg('#lgExp', [['var(--pos)', 'GEX（長條）'], ['var(--curve2)', `GEX+（折線，β=${S.beta.toFixed(1)}）`]]);
 
   drawBars($('#chGex'), rows, r => gexOf(r, sg) / E,
     (r, v) => v >= 0 ? 'var(--pos)' : 'var(--neg)',
@@ -607,7 +669,7 @@ function methodology() {
 function mountExpiries() {
   const seg = $('#segExp'), sel = $('#selExp'), ex = S.data.expiries;
   if (!S.data.views[S.exp]) S.exp = 'ALL';
-  if (ex.length > 12) {                       // 美股到期別太多，改用下拉
+  if (ex.length > (isNarrow() ? 5 : 12)) {    // 到期別太多（或螢幕太窄）就改用下拉
     seg.style.display = 'none'; sel.style.display = '';
     sel.innerHTML = `<option value="ALL">合併（全部 ${ex.length} 個）</option>` +
       ex.map(e => `<option value="${e.code}"${e.code === S.exp ? ' selected' : ''}>${e.ltd}　${e.kind}　${fmtK(e.oi)} 口</option>`).join('');
@@ -674,6 +736,20 @@ function howto() {
   數字與計算全部由本專案自己從公開資料算出，與該站無關。</p>`;
 }
 
+/* --------------------------------------------------------- 偏好設定（存在瀏覽器）*/
+const PREF = 'gexmap.pref';
+function loadPref() {
+  try { return JSON.parse(localStorage.getItem(PREF) || '{}'); } catch (e) { return {}; }
+}
+function savePref(p) {
+  try { localStorage.setItem(PREF, JSON.stringify(p)); } catch (e) { /* 無痕模式等情況，忽略 */ }
+}
+function applyFs(v) {
+  document.documentElement.style.setProperty('--fs', String(v));
+  [...$('#segFs').querySelectorAll('button')].forEach(b =>
+    b.setAttribute('aria-pressed', Math.abs(parseFloat(b.dataset.v) - v) < 1e-9));
+}
+
 /* --------------------------------------------------------- 啟動 */
 (async function boot() {
   const embedded = window.__GEXMAP__;
@@ -689,7 +765,13 @@ function howto() {
     switchTo(b.dataset.v);
   });
 
+  const pref = loadPref();
+  applyFs(pref.fs || 1);
+  if (pref.cvd === '1') { S.cvd = '1'; document.documentElement.setAttribute('data-cvd', '1'); }
+
   await switchTo(syms[0].code);
+  [...$('#segCvd').querySelectorAll('button')].forEach(b =>
+    b.setAttribute('aria-pressed', b.dataset.v === String(S.cvd)));
 
   $('#selDate').addEventListener('change', e => switchTo(S.sym, e.target.value));
   $('#segExp').addEventListener('click', ev => {
@@ -700,12 +782,20 @@ function howto() {
   $('#selExp').addEventListener('change', e => { S.exp = e.target.value; render(); });
   segment($('#segSign'), 'sign', v => v);
   segment($('#segCvd'), 'cvd', v => v, () => {
-    document.documentElement.setAttribute('data-cvd', S.cvd); render();
+    document.documentElement.setAttribute('data-cvd', S.cvd);
+    savePref({ ...loadPref(), cvd: S.cvd }); render();
   });
-  $('#selBand').addEventListener('change', e => { S.band = +e.target.value; render(); });
-  $('#selBucket').addEventListener('change', e => { S.bucket = +e.target.value; render(); });
+  $('#segFs').addEventListener('click', ev => {
+    const b = ev.target.closest('button'); if (!b) return;
+    const v = parseFloat(b.dataset.v);
+    applyFs(v); savePref({ ...loadPref(), fs: v }); render();
+  });
+  $('#selBand').addEventListener('change', e => { S.band = +e.target.value; mountBuckets(); render(); });
+  $('#selBucket').addEventListener('change', e => { S.bucket = parseFloat(e.target.value); render(); });
   $('#rngBeta').addEventListener('input', e => {
     S.beta = +e.target.value; $('#valBeta').textContent = S.beta.toFixed(1); render();
   });
-  let t; addEventListener('resize', () => { clearTimeout(t); t = setTimeout(render, 140); });
+  let t; const redraw = () => { clearTimeout(t); t = setTimeout(() => { mountExpiries(); render(); }, 160); };
+  addEventListener('resize', redraw);
+  addEventListener('orientationchange', redraw);
 })();
