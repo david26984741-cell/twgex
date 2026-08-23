@@ -301,13 +301,28 @@ def main() -> int:
     }
 
     outdir = os.path.join(DATA, sym)
-    os.makedirs(os.path.join(outdir, "history"), exist_ok=True)
-    for path in (os.path.join(outdir, "latest.json"),
-                 os.path.join(outdir, "history", f"{day}.json")):
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
+    hdir = os.path.join(outdir, "history")
+    os.makedirs(hdir, exist_ok=True)
+    before = sorted(f[:-5] for f in os.listdir(hdir)
+                    if f.endswith(".json") and f[:-5].isdigit())
+    newest = before[-1] if before else None
 
-    hist = sorted(f[:-5] for f in os.listdir(os.path.join(outdir, "history"))
+    # 歷史檔一律寫（同一天重跑就是覆蓋成最新的一份）
+    with open(os.path.join(hdir, f"{day}.json"), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
+
+    # latest.json 只在這次抓到的日期「不比現有最新的舊」時才更新。
+    # 手動觸發若剛好落在來源還沒更新的時段（例如台北下午手動跑、美股那邊 OCC
+    # 還沒發布前一日未平倉），抓回來的會是更舊的一天；沒有這道防線就會把首頁
+    # 的資料日期往回推。舊資料還是進歷史檔，日期下拉照樣選得到。
+    if newest is None or day >= newest:
+        with open(os.path.join(outdir, "latest.json"), "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
+    else:
+        print(f"  註：這次抓到的是 {day}，比現有最新的 {newest} 舊；"
+              f"只寫進歷史檔，latest.json 保持不動。", file=sys.stderr)
+
+    hist = sorted(f[:-5] for f in os.listdir(hdir)
                   if f.endswith(".json") and f[:-5].isdigit())
     json.dump({"dates": hist, "latest": max(hist) if hist else day},
               open(os.path.join(outdir, "index.json"), "w", encoding="utf-8"),
