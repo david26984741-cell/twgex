@@ -149,18 +149,37 @@ function gridStep(rows) {
 }
 
 // 原生履約價間距（台指 50 點、美股 0.5~5 元），分桶選項由它推出來
+// 履約價的「原生間距」。不能直接取最小間距：調整後的非標準序列會毀掉它——
+// 例如 QQQ 有一組 xxx.78 的調整履約價，和旁邊的標準履約價只差 0.22，
+// 用最小值會讓分桶選項變成 0.44 / 0.88 這種沒意義的數字。
+// 規則：取「最小的、夠常見（≥15%）、而且能整除主間距」的那個間距。
+// 前一個條件擋掉零星雜訊，後一個條件擋掉調整履約價（0.22 除不進 1 或 5）。
+// 台指同時有週選（50 點）與月選（100 點）時，50 佔三成以上且能整除 100 → 正確取到 50。
 function nativeStep() {
   const ks = view().strikes.map(r => r.K).sort((a, b) => a - b);
-  let d = Infinity;
-  for (let i = 1; i < ks.length; i++) { const g = ks[i] - ks[i - 1]; if (g > 1e-9) d = Math.min(d, g); }
-  return isFinite(d) && d > 0 ? d : 50;
+  const cnt = new Map(); let tot = 0;
+  for (let i = 1; i < ks.length; i++) {
+    const g = +(ks[i] - ks[i - 1]).toFixed(6);
+    if (g > 1e-9) { cnt.set(g, (cnt.get(g) || 0) + 1); tot++; }
+  }
+  if (!tot) return 50;
+  let modal = null, modalN = -1;
+  for (const [g, n] of cnt) if (n > modalN || (n === modalN && g < modal)) { modal = g; modalN = n; }
+  for (const g of [...cnt.keys()].sort((a, b) => a - b)) {
+    if (cnt.get(g) / tot < 0.15) continue;
+    const q = modal / g;
+    if (Math.abs(q - Math.round(q)) < 1e-6 && Math.round(q) >= 1) return g;
+  }
+  return modal;
 }
 
 function mountBuckets() {
   const g = nativeStep(), sel = $('#selBucket');
+  const tw = S.data.meta.symbol === 'TXO';
   const opts = [[0, '原始履約價']].concat([2, 4, 10].map(k => {
     const v = +(g * k).toFixed(4);
-    return [v, `每 ${v >= 1 ? fmtK(v) : v} ${S.data.meta.symbol === 'TXO' ? '點' : ''}`.trim()];
+    const n = Number.isInteger(v) ? fmtK(v) : v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    return [v, tw ? `每 ${n} 點` : `每 $${n}`];
   }));
   // 手機上原始履約價會擠成一片，預設挑一個讓長條數量落在 100 根以內的分桶
   if (S.bucket == null || !opts.some(o => o[0] === S.bucket)) {
