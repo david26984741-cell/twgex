@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 推送被拒時要能 rebase
 
       - uses: actions/setup-python@v5
         with:
@@ -75,4 +77,15 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/
           git commit -m "曝險地圖更新 $(date -u +%Y-%m-%d)"
-          git push
+          # main 有可能在這次跑的期間被人推過（例如從網頁改了 app.js），
+          # 直接 push 會被拒。失敗就 rebase 後重試，最多三次。
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "推送成功（第 $i 次嘗試）"; exit 0
+            fi
+            echo "推送被拒，先取回遠端再 rebase（第 $i 次）"
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort || true; echo "::error::rebase 失敗，請手動處理"; exit 1; }
+            sleep 5
+          done
+          echo "::error::推送連續失敗三次"; exit 1
