@@ -2,9 +2,9 @@ name: 每日更新曝險地圖
 
 on:
   schedule:
-    # 台北 15:40 / 17:40（UTC+8）：台指。第二次是保險，期交所偶爾延遲公布。
-    - cron: '40 7 * * 1-5'
-    - cron: '40 9 * * 1-5'
+    # 台北 15:15（UTC+8）：台指。一般交易時段 13:45 收盤，期交所盤後檔通常 15:00 前後上架。
+    # 只有這一班、沒有保險班——期交所當天若延遲上架，就自己按 Run workflow 補跑。
+    - cron: '15 7 * * 1-5'
     # 美東 09:20（開盤前）：抓前一個交易日。此時 OCC 已把未平倉量更新完，
     # CBOE 的報價也還停在前一個收盤，兩邊指的是同一天。週一到週五各跑一次，抓的都是前一個交易日（OCC 每個營業日早上才發布前一日的未平倉量，
     # 所以週六跑會拿到過期的 OI；程式會從資料本身推斷 OI 是哪一天的並據此標示）。
@@ -76,7 +76,9 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/
-          git commit -m "曝險地圖更新 $(date -u +%Y-%m-%d)"
+          # 提交訊息帶上各標的實際的資料日期，從 commit 清單一眼就看得出這次有沒有抓到新的一天
+          DATES=$(python -c "import json,os;print(' / '.join(s+' '+json.load(open(os.path.join('data',s,'latest.json'),encoding='utf-8'))['meta']['trade_date'] for s in ('TXO','SPY','QQQ') if os.path.exists(os.path.join('data',s,'latest.json'))))")
+          git commit -m "曝險地圖更新 ${DATES:-$(date -u +%Y-%m-%d)}"
           # main 有可能在這次跑的期間被人推過（例如從網頁改了 app.js），
           # 直接 push 會被拒。失敗就 rebase 後重試，最多三次。
           for i in 1 2 3; do
