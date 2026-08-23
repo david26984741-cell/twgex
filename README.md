@@ -70,9 +70,20 @@ gh repo create twopt-gexmap --private --source=. --push
 
 ## 自動更新
 
-`.github/workflows/daily.yml` 在台北時間每個交易日 15:40 與 17:40 各跑一次
-（第二次是保險，期交所偶爾延遲），把 `data/` 提交回 repo。
-資料沒更新（假日、來源延遲）時不會產生空提交。
+`.github/workflows/daily.yml` 的排程（時間都是台北時間，cron 寫死 UTC，所以全年固定）：
+
+| 台北時間 | 標的 | 備註 |
+|---|---|---|
+| 週一～五 15:15 | TXO | 一般交易時段 13:45 收盤，期交所盤後檔約 15:00 上架 |
+| 週一～五 21:20 | SPY / QQQ | 美東夏令 09:20 / 冬令 08:20，抓的是**前一個**美股收盤 |
+
+沒有保險班。期交所當天延遲上架的話，到 Actions 頁面按 **Run workflow** 補跑即可
+（輸入框留空 = 三個標的都跑，只想補台指就打 `TXO`）。
+手動與排程之間有 `concurrency` 群組擋著，不會同時跑，只會排隊。
+
+資料沒更新（假日、來源延遲）時不會產生空提交。提交訊息會帶上各標的實際的資料日期，
+例如 `曝險地圖更新 TXO 2026/08/21 / SPY 2026/08/21 / QQQ 2026/08/20`，
+從 commit 清單一眼就看得出這次有沒有抓到新的一天。
 
 開啟 GitHub Pages：Settings → Pages → Source 選 `main` branch `/ (root)`。
 repo 內已有 `.nojekyll`。
