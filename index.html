@@ -113,6 +113,18 @@ tbody tr:hover{background:#141d29}
 .meth code{background:var(--surface2);padding:1px 5px;border-radius:4px;font-size:calc(12px * var(--fs));color:var(--ink)}
 .meth h3{font-size:calc(13px * var(--fs));color:var(--ink);margin:14px 0 4px}
 .warn{border-left:3px solid var(--flip);padding-left:11px;margin:10px 0}
+/* ---- 說明用圖解 ---- */
+.fig{margin:14px 0 6px}
+.figrow{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;max-width:calc(700px * var(--fs))}
+.figcol{flex:1 1 280px;min-width:0}
+.figt{font-size:calc(12px * var(--fs));color:var(--ink);font-weight:600;margin:0 0 5px}
+.figlg{font-size:calc(11px * var(--fs));color:var(--ink3);margin:0 0 5px}
+.figsvg{display:block;width:100%;max-width:calc(440px * var(--fs));height:auto;box-sizing:border-box;
+        background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.figsvg.half{max-width:calc(320px * var(--fs))}
+.figcap{font-size:calc(11.5px * var(--fs));color:var(--ink3);line-height:1.8;margin:7px 0 2px;
+        max-width:calc(560px * var(--fs))}
+.figcap b{color:var(--ink2)}
 /* ---- 手機 ---- */
 @media(max-width:900px){
   .wrap{padding:14px calc(12px + env(safe-area-inset-right)) 40px calc(12px + env(safe-area-inset-left))}
@@ -139,6 +151,9 @@ tbody tr:hover{background:#141d29}
   th,td{padding:4px 7px}
   .tblwrap{max-height:60vh}
   .tblhint{display:block;font-size:calc(11px * var(--fs));color:var(--ink3);margin-top:8px}
+  .figrow{gap:14px}
+  .figcol{flex:1 1 100%}
+  .figsvg,.figsvg.half{max-width:100%}
 }
 @media(max-width:430px){
   .sumgrid{grid-template-columns:1fr}

@@ -682,8 +682,162 @@ function mountExpiries() {
 }
 
 
+/* --------------------------------------------------------- 說明用圖解 */
+const figSvg = (vb, inner, extra) =>
+  `<svg class="figsvg${extra ? ' ' + extra : ''}" viewBox="${vb}" preserveAspectRatio="xMidYMid meet" role="img" aria-hidden="true">${inner}</svg>`;
+const fT = (x, y, s, txt, o) => { o = o || {};
+  return `<text x="${x}" y="${y}" font-size="${(+s).toFixed(1)}" fill="${o.fill || 'var(--ink3)'}"` +
+         `${o.anchor ? ` text-anchor="${o.anchor}"` : ''}${o.w ? ' font-weight="600"' : ''}>${txt}</text>`; };
+const fL = (x1, y1, x2, y2, o) => { o = o || {};
+  return `<line x1="${(+x1).toFixed(1)}" y1="${(+y1).toFixed(1)}" x2="${(+x2).toFixed(1)}" y2="${(+y2).toFixed(1)}" ` +
+         `stroke="${o.s || 'var(--grid)'}" stroke-width="${o.w || 1}"${o.dash ? ` stroke-dasharray="${o.dash}"` : ''}` +
+         `${o.cap ? ' stroke-linecap="round"' : ''}/>`; };
+const fP = (d, o) => { o = o || {};
+  return `<path d="${d}" fill="${o.fill || 'none'}" stroke="${o.s || 'none'}" stroke-width="${o.w || 1.8}" ` +
+         `stroke-linejoin="round" stroke-linecap="round"${o.dash ? ` stroke-dasharray="${o.dash}"` : ''}/>`; };
+const fD = (x, y, r, c) => `<circle cx="${(+x).toFixed(1)}" cy="${(+y).toFixed(1)}" r="${r}" fill="${c}"/>`;
+const fR = (x, y, w, h, c, rx) =>
+  `<rect x="${(+x).toFixed(1)}" y="${(+y).toFixed(1)}" width="${(+w).toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" fill="${c}"${rx ? ` rx="${rx}"` : ''}/>`;
+const fPoly = (pts, c) => `<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="1.1"/>`;
+
+/* 步驟 1：三個總量看的是斜率，不是絕對值 */
+function fig1(T) {
+  const rows = [
+    { lab: '總 GEX',  v: [18, 17, 14, 13, 11],           lo: 0,  hi: 21, c: 'var(--pos)',    n: '+18 → +11' },
+    { lab: '總 VEX',  v: [-4.0, -4.6, -5.3, -6.0, -6.6], lo: -8, hi: 0,  c: 'var(--neg)',    n: '−4.0 → −6.6' },
+    { lab: '總 GEX+', v: [14, 12, 9, 6, 4.4],            lo: 0,  hi: 17, c: 'var(--curve2)', n: '+14 → +4.4' },
+  ];
+  const x0 = 92, x1 = 274, H = 164;
+  let s = '';
+  rows.forEach((r, i) => {
+    const cy = 32 + i * 46, h = 14;
+    const y = v => cy + h - ((v - r.lo) / (r.hi - r.lo)) * (2 * h);
+    const px = j => x0 + (x1 - x0) * j / (r.v.length - 1);
+    s += fR(x0 - 20, cy - h - 4, (x1 + 4) - (x0 - 20), 2 * h + 8, 'rgba(255,255,255,.04)', 4);
+    s += fT(2, cy + h * 0.3, T, r.lab, { fill: 'var(--ink2)' });
+    s += fL(x0 - 2, y(0), x1 + 3, y(0), { s: '#4a5a6e', dash: '3 3' });
+    s += fT(x0 - 6, y(0) + T * 0.34, T * 0.85, '0', { anchor: 'end' });
+    s += fP(r.v.map((v, j) => (j ? 'L' : 'M') + px(j).toFixed(1) + ' ' + y(v).toFixed(1)).join(''), { s: r.c, w: 2, cap: 1 });
+    r.v.forEach((v, j) => { s += fD(px(j), y(v), j === r.v.length - 1 ? 3.2 : 1.9, r.c); });
+    s += fT(x1 + 11, y(r.v[4]) + T * 0.34, T, r.n, { fill: r.c, w: 1 });
+  });
+  s += fT(x0, H - 7, T * 0.88, '5 天前', { anchor: 'middle' });
+  s += fT(x1, H - 7, T * 0.88, '今天', { anchor: 'middle' });
+  return figSvg('0 0 420 ' + H, s);
+}
+
+/* 步驟 2：同一個今天，兩種來歷 */
+function fig2p(T, spot, flip) {
+  const W = 214, H = 134, x0 = 32, x1 = 146, yT = 16, yB = 100;
+  const lo = 43800, hi = 46600;
+  const y = v => yB - ((v - lo) / (hi - lo)) * (yB - yT);
+  const px = j => x0 + (x1 - x0) * j / 4;
+  let s = '';
+  [44000, 45000, 46000].forEach(t => {
+    s += fL(x0 - 3, y(t), x1 + 3, y(t));
+    s += fT(x0 - 6, y(t) + T * 0.34, T * 0.85, (t / 1000).toFixed(0) + 'k', { anchor: 'end' });
+  });
+  const mk = (arr, col, dash) => {
+    s += fP(arr.map((v, j) => (j ? 'L' : 'M') + px(j).toFixed(1) + ' ' + y(v).toFixed(1)).join(''), { s: col, w: 2, dash, cap: 1 });
+    s += fD(px(4), y(arr[4]), 3.2, col);
+  };
+  mk(flip, 'var(--flip)', '3.5 3');
+  mk(spot, 'var(--spot)');
+  const gx = x1 + 13, ys = y(spot[4]), yf = y(flip[4]);
+  s += fL(gx, ys, gx, yf, { s: 'var(--ink2)', w: 1.2 });
+  s += fL(gx - 3, ys, gx + 3, ys, { s: 'var(--ink2)', w: 1.2 });
+  s += fL(gx - 3, yf, gx + 3, yf, { s: 'var(--ink2)', w: 1.2 });
+  const gap = spot[4] - flip[4];
+  s += fT(gx + 6, (ys + yf) / 2 - 1, T, gap.toLocaleString('en-US'), { fill: 'var(--ink)', w: 1 });
+  s += fT(gx + 6, (ys + yf) / 2 + T + 1, T * 0.88, '−' + (gap / spot[4] * 100).toFixed(1) + '%', {});
+  s += fT(x0, H - 6, T * 0.88, '5 天前', { anchor: 'middle' });
+  s += fT(x1, H - 6, T * 0.88, '今天', { anchor: 'middle' });
+  return figSvg('0 0 ' + W + ' ' + H, s, 'half');
+}
+
+/* 步驟 3：厚度是誰撐的、什麼時候脫掉 */
+function fig3(T) {
+  const W = 420, H = 176, x0 = 30, x1 = 402, yB = 124, yT = 46;
+  const ex = [
+    { d: '08-26', g: 6.2, oi: 2100 }, { d: '08-28', g: 0.4, oi: 900 },
+    { d: '09-02', g: 0.5, oi: 1200 }, { d: '09-04', g: 0.3, oi: 800 },
+    { d: '09-16', g: 1.1, oi: 3400 }, { d: '10-21', g: 0.2, oi: 700 },
+  ];
+  const n = ex.length, cw = (x1 - x0) / n, bw = cw * 0.4;
+  const yg = v => yB - (v / 7) * (yB - yT);
+  const yo = v => yB - 10 - (v / 4200) * (yB - yT - 26);
+  const cx = i => x0 + cw * (i + 0.5);
+  let s = fL(x0, yB, x1, yB, { s: '#3a4a5e', w: 1.2 });
+  ex.forEach((e, i) => {
+    s += fR(cx(i) - bw / 2, yg(e.g), bw, yB - yg(e.g), 'var(--pos)', 2);
+    s += fT(cx(i), yB + T + 4, T * 0.88, e.d, { anchor: 'middle' });
+  });
+  s += fP(ex.map((e, i) => (i ? 'L' : 'M') + cx(i).toFixed(1) + ' ' + yo(e.oi).toFixed(1)).join(''), { s: 'var(--ink3)', w: 1.2, dash: '4 3' });
+  ex.forEach((e, i) => {
+    s += `<circle cx="${cx(i).toFixed(1)}" cy="${yo(e.oi).toFixed(1)}" r="3.2" fill="var(--bg)" stroke="var(--ink2)" stroke-width="1.4"/>`;
+  });
+  s += fL(cx(0) + 6, yg(6.2) + 4, cx(0) + 22, 26, { s: 'var(--ink3)' });
+  s += fT(cx(0) + 25, 26 + T * 0.34, T, '整張圖 68% 的厚度在這一格', { fill: 'var(--ink2)' });
+  s += fL(cx(4) - 5, yo(3400) - 3, cx(4) - 20, 62, { s: 'var(--ink3)' });
+  s += fT(cx(4) - 23, 62 + T * 0.34, T, '未平倉最多的卻是這一格', { anchor: 'end', fill: 'var(--ink2)' });
+  return figSvg('0 0 ' + W + ' ' + H, s);
+}
+
+/* 步驟 4：會跟著價格跑的假牆 vs 釘住的真牆 */
+function fig4(T) {
+  const W = 420, H = 148, x0 = 26, x1 = 402, yB = 112, yT = 46;
+  const g  = [.1, .15, .3, .5, .9, 1.4, 3.0, 1.2, 3.0, 1.1, .7, .4, .25, .15];
+  const oi = [120, 180, 300, 420, 600, 700, 300, 650, 2100, 540, 480, 300, 260, 180];
+  const n = g.length, cw = (x1 - x0) / n, bw = cw * 0.5, spotI = 6, wallI = 8;
+  const cx = i => x0 + cw * (i + 0.5);
+  const y = v => yB - (v / 3.8) * (yB - yT);
+  let s = fL(x0, yB, x1, yB, { s: '#3a4a5e', w: 1.2 });
+  g.forEach((v, i) => {
+    s += fR(cx(i) - bw / 2, y(v), bw, yB - y(v),
+            (i === spotI || i === wallI) ? 'var(--pos)' : 'var(--grid)', 2);
+  });
+  s += fL(cx(spotI), yT - 20, cx(spotI), yB + 6, { s: 'var(--spot)', w: 1.6, dash: '4 4' });
+  s += fT(cx(spotI) + 5, yT - 20 + T * 0.9, T * 0.9, '現貨', { fill: 'var(--spot)' });
+  s += fL(cx(spotI) - 5, y(3.0) - 3, cx(spotI) - 24, 22, { s: 'var(--ink3)' });
+  s += fT(cx(spotI) - 27, 18, T, '未平倉只有 300 口', { anchor: 'end', fill: 'var(--ink2)' });
+  s += fT(cx(spotI) - 27, 18 + T * 1.4, T * 0.92, '價平 gamma 最大', { anchor: 'end' });
+  s += fL(cx(wallI) + 5, y(3.0) - 3, cx(wallI) + 22, 46, { s: 'var(--ink3)' });
+  s += fT(cx(wallI) + 25, 42, T, '未平倉 2,100 口', { fill: 'var(--ink2)' });
+  s += fT(cx(wallI) + 25, 42 + T * 1.4, T * 0.92, '釘在這個價位不動', {});
+  s += fT(x0, H - 7, T * 0.88, '← 低履約價', {});
+  s += fT(x1, H - 7, T * 0.88, '高履約價 →', { anchor: 'end' });
+  return figSvg('0 0 ' + W + ' ' + H, s);
+}
+
+/* 步驟 5：同一批部位的兩張臉 */
+function fig5(T) {
+  const W = 420, H = 156, x0 = 88, x1 = 402, mid = 92, hUp = 44, hDn = 38;
+  const gx  = [.2, .4, .7, 1.1, 1.6, 2.2, 1.2, 2.8, 3.3, 2.9, 1.0, .6, .3];
+  const vx  = [.04, .07, .09, .11, .14, .17, .09, .25, .30, .27, .08, .05, .03];
+  const hot = [7, 8, 9];
+  const n = gx.length, cw = (x1 - x0) / n, bw = cw * 0.52;
+  const cx = i => x0 + cw * (i + 0.5);
+  let s = '';
+  hot.forEach(i => { s += fR(cx(i) - cw * 0.44, mid - hUp - 12, cw * 0.88, hUp + hDn + 24, 'rgba(255,255,255,.055)', 3); });
+  gx.forEach((v, i) => { s += fR(cx(i) - bw / 2, mid - 6 - (v / 3.5) * hUp, bw, (v / 3.5) * hUp, 'var(--pos)', 2); });
+  vx.forEach((v, i) => { s += fR(cx(i) - bw / 2, mid + 6, bw, (v / .32) * hDn, 'var(--neg)', 2); });
+  s += fT(x0 - 8, mid - 6 - hUp * 0.45, T, '正 GEX 集中', { anchor: 'end', fill: 'var(--pos)' });
+  s += fT(x0 - 8, mid + 6 + hDn * 0.55, T, '負 VEX 集中', { anchor: 'end', fill: 'var(--neg)' });
+  s += fL(cx(hot[0]) - cw * 0.44, mid - hUp - 16, cx(hot[2]) + cw * 0.44, mid - hUp - 16, { s: 'var(--ink3)' });
+  s += fT((cx(hot[0]) + cx(hot[2])) / 2, mid - hUp - 22, T, '同一批履約價', { anchor: 'middle', fill: 'var(--ink2)' });
+  s += fT(x0 - 10, H - 12, T * 0.88, '← 低履約價', { anchor: 'end' });
+  s += fT(x1, H - 12, T * 0.88, '高履約價 →', { anchor: 'end' });
+  return figSvg('0 0 ' + W + ' ' + H, s);
+}
+
+function figBlock(svg, cap, legend) {
+  return `<div class="fig">${legend ? `<div class="figlg">${legend}</div>` : ''}${svg}` +
+         `${cap ? `<div class="figcap">${cap}</div>` : ''}</div>`;
+}
+
 function howto() {
   const m = S.data.meta, us = m.symbol !== 'TXO';
+  const T = isNarrow() ? 12.6 : 11;          // 圖解內文字大小（user unit）
   $('#howto').innerHTML = `
   <p style="margin:0 0 12px">這張圖畫的是<b>地形</b>，不是天氣。它告訴你造市商在哪些價位會被迫買、
   在哪些價位會被迫賣，不告訴你價格會往哪邊走。下面五步是使用順序，照著跑一遍再看盤。</p>
@@ -693,13 +847,30 @@ function howto() {
   總 VEX 幾乎永遠是負的（結構使然），所以要看的是<b>有多負</b>，那是波動率上升時會被倒出來的量。<br>
   總 GEX+ 是兩者合成，最接近真實環境。<br>
   <b>單日數字沒有意義，要跟前幾天比。</b> 用左上角的「資料日期」切回前幾天，看這三個數字往哪個方向動。
+  ${figBlock(fig1(T),
+    '這五天裡，三個數字沒有一個跨過零：總 GEX 還是正的、總 GEX+ 也還是正的。' +
+    '但三條線一起往同一個方向走——正的那兩個一路變薄、負的那個一路變厚。' +
+    '<b>只看今天，你會說「結構還行」；看斜率，你會說「這面牆正在被拆」。</b>' +
+    '示意數字，非實際盤面。')}
 
   <h3>步驟 2　分清楚「門檻有沒有動」與「距離有沒有變遠」</h3>
   <div class="warn">這是整套讀法最容易搞錯、也最值錢的一件事。</div>
+  「距現貨 %」變大只有兩種來歷，它們的賠率完全不同：<br>
   兩條 Flip 幾乎沒動、但現貨往上跑了一段 → 安全距離是<b>價格自己墊出來的</b>，不是結構撐出來的。
   哪天原路走回去，門檻還在原地等，一點都沒少。<br>
-  Flip 自己往上移動 → 才是真的有人在下面多加了一層。<br>
-  兩件事在圖上看起來都是「離翻負還很遠」，但賠率完全不同。摘要卡上的「距現貨 %」就是給你追這個用的。
+  現貨沒怎麼動、Flip 自己往下退 → 才是<b>結構真的多讓出了一層</b>，那是有人在下面補了正 gamma。<br>
+  兩件事在<b>今天這一格</b>上長得一模一樣，都是「離翻負還很遠」。要分辨只能把兩條線分開看。
+  ${figBlock(
+    `<div class="figrow">
+       <div class="figcol"><div class="figt">A　門檻沒動，是價格跑掉了</div>${fig2p(T, [44300,44700,45200,45700,46000], [44300,44320,44290,44310,44300])}</div>
+       <div class="figcol"><div class="figt">B　現貨沒動，是門檻退開了</div>${fig2p(T, [45900,46100,45950,46050,46000], [45900,45500,45000,44600,44300])}</div>
+     </div>`,
+    '兩張圖的<b>今天</b>完全相同：現貨 46,000、Gamma Flip 44,300、距現貨 −3.7%。' +
+    '摘要卡上看到的就只有這一格，兩者無從分辨。<br>' +
+    'A 的 1,700 點全部是現貨自己跑出來的，門檻五天沒挪過一步——跌回 44,300，處境和五天前一模一樣。' +
+    'B 的 1,700 點是門檻自己退下去讓出來的，同樣跌到 44,300 才翻負，但那是真的多出來的空間。<br>' +
+    '<b>做法：用「資料日期」往回切幾天，分別記下現貨和兩條 Flip，看是誰在動。</b>',
+    '<span style="color:var(--spot)">━</span> 現貨　<span style="color:var(--flip)">┅</span> Gamma Flip')}
 
   <h3>步驟 3　看到期日結構拆解，找出「護甲什麼時候脫掉」</h3>
   翻到最下面那張「到期日結構拆解」。要問的問題只有一個：<b>現在這些厚度是誰撐的？</b><br>
@@ -709,6 +880,12 @@ function howto() {
   越接近到期，每一口的 gamma 越大，所以近月常常用比較少的口數撐出更大的曝險。
   結算之後接手的那批遠月，撐不出同樣的厚度。<br>
   這一步給的是<b>時間軸</b>，不是價位。價位可以每天重算，日期不會挪。
+  ${figBlock(fig3(T),
+    '左邊第一格撐起整張圖的絕大部分——它結算完，剩下的到期日補不上同樣的厚度。' +
+    '同時注意 09-16 那一格：<b>未平倉是全場最多的，GEX 卻只有第二</b>。' +
+    '越遠的到期日，每一口的 gamma 越小，堆再多口數也撐不出厚度。' +
+    '示意數字，非實際盤面。',
+    '<span style="color:var(--pos)">▮</span> 各到期日 GEX　<span style="color:var(--ink3)">◦┈</span> 各到期日未平倉')}
 
   <h3>步驟 4　讀牆與坑，但別把未平倉當成 gamma</h3>
   「正 GEX 集中」是上方的牆，「負 GEX 集中」是下方的坑。看距離現貨幾 % 比看絕對價位有用。<br>
@@ -716,6 +893,12 @@ function howto() {
   gamma 最大。這種牆會跟著價格移動，不是固定的地形。想分辨，把資料表打開對照該履約價的未平倉口數。<br>
   ${us ? '美股這邊還要留意：長天期履約價會有很大的未平倉，但每口 gamma 很小，在 GEX 上幾乎不佔份量。'
        : '台指這邊週選與月選的履約價間距不同（50 點 vs 100 點），合併看時建議把「履約價分桶」調成 100 點。'}
+  ${figBlock(fig4(T),
+    '兩根一樣高的柱子，來歷完全不同。貼著現價那根靠的是「價平每口 gamma 最大」，' +
+    '未平倉其實很少——<b>它是現價的影子，明天現價換位置，它就跟著換</b>。' +
+    '右邊那根靠的是實打實的兩千多口未平倉，價格走到哪它都在原地。' +
+    '想分辨，把「資料表（逐履約價）」打開，比對該履約價的 Call / Put 未平倉口數。' +
+    '示意數字，非實際盤面。')}
 
   <h3>步驟 5　對照「正 GEX 集中」與「負 VEX 集中」有沒有重疊</h3>
   如果同一批履約價同時出現在兩張榜上，那是<b>同一批部位的兩張臉</b>。<br>
@@ -723,6 +906,11 @@ function howto() {
   但同一批部位的 vanna 是負的，波動率一跳，避險需求就反轉。<br>
   <b>平常幫忙壓波動的那幾堵牆，就是波動來的時候最先鬆手的那幾堵。</b>
   這是持倉留下的形狀，不是有人在佈局。
+  ${figBlock(fig5(T),
+    '上下兩排是同一條履約價軸。被框起來的那幾根，在「正 GEX 集中」和「負 VEX 集中」兩張榜上同時出現——' +
+    '那是同一批賣方部位：gamma 是正的（幫忙磨），vanna 是負的（波動一跳就翻臉）。' +
+    '<b>兩張榜的重疊程度，就是這張地圖有多脆的量尺。</b>' +
+    '示意數字，非實際盤面。')}
 
   <h3>最後：這張圖不能拿來做什麼</h3>
   有坑不代表一定會跌，沒坑也不代表跌不下去——只代表跌下去的時候，<b>沒有人幫你踩煞車</b>。<br>
