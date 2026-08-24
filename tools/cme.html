@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CME ES 選擇權採集器</title>
+<style>
+:root{--bg:#0b1017;--card:#121b26;--ink:#e6edf3;--ink2:#8fa3b8;--line:#24435c;--ok:#3fb950;--bad:#f85149;--warn:#d29922}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif;font-size:14px;line-height:1.6;padding:20px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:19px;margin:0 0 4px}
+.sub{color:var(--ink2);margin:0 0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+label{display:inline-block;color:var(--ink2);margin-right:6px}
+input{background:#0b1017;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 9px;font:inherit;width:120px}
+button{background:#1f6feb;border:0;color:#fff;border-radius:6px;padding:8px 16px;font:inherit;cursor:pointer}
+button:disabled{background:#30363d;color:#6e7681;cursor:default}
+button.alt{background:#21313f}
+.bar{height:8px;background:#0b1017;border:1px solid var(--line);border-radius:5px;overflow:hidden;margin:12px 0 6px}
+.bar>i{display:block;height:100%;background:#1f6feb;width:0;transition:width .25s}
+.st{color:var(--ink2)}
+pre{background:#0b1017;border:1px solid var(--line);border-radius:6px;padding:10px;max-height:280px;overflow:auto;margin:10px 0 0;font-size:12px;white-space:pre-wrap;word-break:break-all}
+table{border-collapse:collapse;width:100%;margin-top:8px}
+td{padding:3px 8px 3px 0;vertical-align:top}
+td:first-child{color:var(--ink2);white-space:nowrap;width:9em}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+code{background:#0b1017;padding:1px 5px;border-radius:4px;border:1px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>CME ES 選擇權採集器</h1>
+<p class="sub">直接從瀏覽器抓 CME 的公開結算表與成交量表，存成 <code>build.py</code> 吃得下的 JSON。<br>
+CME 擋掉伺服器端的請求（GitHub Actions 一律 403），但允許瀏覽器跨來源存取，所以這一步只能在自己的機器上跑。</p>
+
+<div class="card">
+  <label>交易日</label><input id="d" placeholder="YYYYMMDD">
+  <label style="margin-left:14px">間隔(ms)</label><input id="p" value="110" style="width:70px">
+  <button id="go" style="margin-left:14px">開始抓</button>
+  <button id="dl" class="alt" disabled style="margin-left:6px">重新下載</button>
+  <div class="bar"><i id="bi"></i></div>
+  <div class="st" id="st">交易日留空＝自動取美東時間的前一個交易日（只跳週末，不含假日）。</div>
+</div>
+
+<div class="card" id="res" style="display:none">
+  <table id="tb"></table>
+</div>
+
+<div class="card">
+  <div class="st">紀錄</div>
+  <pre id="log"></pre>
+</div>
+</div>
+
+<script>
+const FUT_PRODUCT = 133;                       // ES 期貨的 productId，選擇權掛在它底下
+const BASE = 'https://www.cmegroup.com';
+const $ = id => document.getElementById(id);
+const S = window.CME = {phase:'idle', i:0, n:0, done:false, err:null, stats:null,
+                        file:null, tradeDate:null, log:[]};
+
+function log(m){ S.log.push(m); const p=$('log'); p.textContent += m+'\n'; p.scrollTop=p.scrollHeight; }
+function st(m){ $('st').innerHTML = m; }
+function bar(){ $('bi').style.width = S.n ? Math.round(S.i/S.n*100)+'%' : '0'; }
+
+const N = x => { const s=String(x==null?'':x).replace(/,/g,'').trim();
+                 if(!s||s==='-') return 0; const v=parseInt(s,10); return isNaN(v)?0:v; };
+const K = x => parseFloat(String(x).replace(/,/g,''));
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const j = async u => { const r = await fetch(BASE+u,{headers:{Accept:'application/json'}});
+                       if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); };
+
+let HOL = null;                                // 美股休市日，從 repo 的 calendar_us.txt 讀
+async function loadHolidays(){
+  if (HOL) return HOL;
+  HOL = new Set();
+  try {
+    const t = await (await fetch('../calendar_us.txt', {cache:'no-cache'})).text();
+    for (const ln of t.split(/\r?\n/)){
+      const m = /^\s*(\d{4})\/(\d{2})\/(\d{2})/.exec(ln);
+      if (m) HOL.add(m[1]+m[2]+m[3]);
+    }
+    log('休市日表 '+HOL.size+' 天');
+  } catch(e){ log('讀不到休市日表，只跳週末：'+e); }
+  return HOL;
+}
+
+function prevSession(hol){                     // 美東時間的前一個交易日
+  const et = new Date(Date.now() - 5*3600*1000);
+  const d = new Date(Date.UTC(et.getUTCFullYear(), et.getUTCMonth(), et.getUTCDate()));
+  const p = n => String(n).padStart(2,'0');
+  const key = () => '' + d.getUTCFullYear() + p(d.getUTCMonth()+1) + p(d.getUTCDate());
+  for (let i = 0; i < 15; i++){
+    d.setUTCDate(d.getUTCDate()-1);
+    if (d.getUTCDay()===0 || d.getUTCDay()===6) continue;
+    if (hol && hol.has(key())) continue;
+    return key();
+  }
+  return key();
+}
+
+// 當日未平倉。成交量表是用 (productId, 月份) 定位的，月份對不上就回 null，不要亂併。
+async function volOI(pid, code, tdC, rt, wantMonth){
+  let v; try { v = await j('/CmeWS/mvc/Volume/Options/Details?productid='+pid+
+      '&tradedate='+tdC+'&expirationcode='+encodeURIComponent(code)+'&reporttype='+rt); }
+  catch(e){ return null; }
+  const md = v.monthData||[]; if(!md.length) return null;
+  if (wantMonth){
+    const want = wantMonth.replace(/\s+/g,' ').trim().toUpperCase();
+    const got  = String(md[0].month||'').replace(/\s+/g,' ').trim().toUpperCase();
+    if (got && want && got !== want) return null;
+  }
+  const map = new Map();
+  for (const m of md){
+    const cp = /Calls/i.test(m.monthID||'') ? 'C' : 'P';
+    for (const r of m.strikeData||[]) map.set(cp+'|'+K(r.strike), [N(r.atClose), N(r.change)]);
+  }
+  return {map};
+}
+
+async function collect(day, pause, maxDays){
+  const td  = day.slice(4,6)+'/'+day.slice(6,8)+'/'+day.slice(0,4);
+  S.tradeDate = td;
+  S.phase='calendar'; log('讀商品行事曆 …');
+  const cal = await j('/CmeWS/mvc/ProductCalendar/Options/'+FUT_PRODUCT);
+  const td0 = new Date(Date.UTC(+day.slice(0,4), +day.slice(4,6)-1, +day.slice(6,8)));
+  const parseLT = s => { const d = new Date(s+' UTC'); return isNaN(d)?null:d; };
+
+  const series = [];
+  for (const ty of cal){
+    const pids = (ty.productIds && ty.productIds.length) ? ty.productIds : [ty.productId];
+    for (const e of ty.calendarEntries||[]){
+      const lt = parseLT(e.lastTrade);
+      if (!lt || lt <= td0) continue;                    // 當日（含）以前到期的不要
+      if ((lt-td0)/86400000 > maxDays) continue;         // 太遠期的未平倉極小，略過
+      const m = /^[A-Z]*?(\d)/.exec(e.productCode||'');  // 代碼裡的數字＝第幾週
+      const wk = m ? +m[1] : 0;
+      const order = [];
+      if (wk>=1 && wk<=pids.length) order.push(pids[wk-1]);
+      for (const p of pids) if (!order.includes(p)) order.push(p);
+      series.push({code:e.productCode, name:ty.name, type:ty.optionType,
+                   lastTrade:e.lastTrade, month:e.contractMonth||'', order});
+    }
+  }
+  S.n = series.length; S.phase='series'; bar();
+  log('未到期系列 '+series.length+' 個，開始逐一抓結算表＋當日未平倉');
+
+  let RT=null; const out=[];
+  let reqs=0, merged=0, fellBack=0, oiPrevTot=0, oiTot=0, chgTot=0;
+  for (const s of series){
+    S.i++; bar(); st('抓取中 '+S.i+' / '+S.n+'　'+s.code);
+    let rows=null, usedPid=null;
+    for (const pid of s.order){
+      reqs++;
+      let data=null;
+      try { data = await j('/CmeWS/mvc/Settlements/Options/Settlements/'+pid+
+        '/OOF?monthYear='+encodeURIComponent(s.code)+
+        '&tradeDate='+encodeURIComponent(td)+'&strategy=DEFAULT'); }
+      catch(e){ await sleep(pause); continue; }
+      const r = (data.settlements||[]).filter(x=>x.strike && String(x.strike).toLowerCase()!=='total');
+      if (r.length){ rows=r; usedPid=pid; break; }
+      await sleep(pause);
+    }
+    if (!rows){ log('  '+s.code+'：沒有結算表，略過'); await sleep(pause); continue; }
+
+    let vo=null;
+    for (const rt of (RT ? [RT, RT==='F'?'P':'F'] : ['F','P'])){
+      reqs++;
+      vo = await volOI(usedPid, s.code, day, rt, s.month);
+      if (vo){ if(!RT){ RT=rt; log('未平倉用 '+(rt==='F'?'最終':'初步')+'報表'); } vo.rt=rt; break; }
+      await sleep(pause);
+    }
+    if (vo) merged++; else { fellBack++; log('  '+s.code+'：成交量表對不上，未平倉退回前一日'); }
+
+    const outRows=[];
+    for (const x of rows){
+      const cp = String(x.type||'').toUpperCase().startsWith('C') ? 'C' : 'P';
+      const oiPrev = N(x.openInterest);
+      let oi = oiPrev, chg = 0;
+      if (vo){ const hit = vo.map.get(cp+'|'+K(x.strike)); if (hit){ oi=hit[0]; chg=hit[1]; } }
+      oiPrevTot+=oiPrev; oiTot+=oi; chgTot+=chg;
+      outRows.push([x.strike, x.type, x.settle, oi, x.volume, oiPrev]);
+    }
+    out.push({code:s.code, name:s.name, type:s.type, lastTrade:s.lastTrade,
+              pid:usedPid, oiSrc: vo?vo.rt:'settle', rows:outRows});
+    await sleep(pause);
+  }
+
+  S.phase='futures'; st('抓期貨結算價 …');
+  let futures=[];
+  try {
+    const f = await j('/CmeWS/mvc/Settlements/Futures/Settlements/'+FUT_PRODUCT+
+      '/FUT?tradeDate='+encodeURIComponent(td)+'&strategy=DEFAULT');
+    futures = (f.settlements||[])
+      .filter(x=>x.month && String(x.month).toLowerCase()!=='total')
+      .map(x=>[x.month, x.settle, x.openInterest]);
+  } catch(e){ log('期貨結算表讀取失敗：'+e); }
+
+  return {tradeDate:td, futures, series:out, oiAsOf:'close', oiReport:RT,
+          stats:{candidates:series.length, fetched:out.length, requests:reqs,
+                 oiMerged:merged, oiFellBack:fellBack,
+                 oiPrevTot, oiTot, chgTot, recon: oiPrevTot+chgTot-oiTot}};
+}
+
+function download(data, day){
+  const name = 'cme_ES_'+day+'.json';
+  const blob = new Blob([JSON.stringify(data)], {type:'application/json'});
+  const u = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=u; a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(u); a.remove(); }, 30000);
+  S.file = name;
+  return name;
+}
+
+function report(d, day){
+  const s = d.stats, n = x => (x||0).toLocaleString('en-US');
+  const okRecon = s.recon === 0;
+  $('res').style.display='';
+  $('tb').innerHTML = [
+    ['交易日', d.tradeDate],
+    ['系列', s.fetched+' / '+s.candidates+'　（請求 '+s.requests+' 次）'],
+    ['未平倉・當日收盤', '<b>'+n(s.oiTot)+'</b> 口　（報表：'+(d.oiReport==='F'?'最終':'初步')+'）'],
+    ['未平倉・前一日', n(s.oiPrevTot)+'　當日變動 '+(s.chgTot>=0?'+':'')+n(s.chgTot)],
+    ['對帳', okRecon
+        ? '<span class="ok">前一日 ＋ 變動 － 當日 ＝ 0，逐檔吻合</span>'
+        : '<span class="bad">差 '+n(s.recon)+' 口，請檢查</span>'],
+    ['未平倉來源', s.oiMerged+' 個系列取當日收盤'+
+        (s.oiFellBack ? '，<span class="warn">'+s.oiFellBack+' 個退回前一日</span>' : '')],
+    ['檔案', '<code>'+S.file+'</code>　已送到瀏覽器的下載資料夾'],
+    ['接下來', '<code>python build.py --symbol ES --json '+S.file+'</code>'],
+  ].map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td></tr>').join('');
+  st(okRecon ? '<span class="ok">完成</span>' : '<span class="bad">完成，但對帳有差</span>');
+}
+
+async function run(){
+  $('go').disabled = true; $('dl').disabled = true;
+  Object.assign(S, {phase:'start', i:0, n:0, done:false, err:null, stats:null, file:null});
+  $('log').textContent=''; $('res').style.display='none';
+  const typed = $('d').value.trim().replace(/\D/g,'');
+  const day = typed || prevSession(await loadHolidays());
+  if (!/^\d{8}$/.test(day)){
+    st('<span class="bad">交易日格式要是 YYYYMMDD</span>'); $('go').disabled=false; return;
+  }
+  S.day = day;
+  log('交易日 '+day + (typed ? '（手動指定）' : '（自動：美東前一個交易日）'));
+  try {
+    const pause = Math.max(0, parseInt($('p').value,10) || 110);
+    const d = await collect(day, pause, 400);
+    if (!d.series.length) throw new Error('一個系列都沒抓到（這天可能不是交易日）');
+    S.data = d; S.stats = d.stats;
+    download(d, day);
+    report(d, day);
+    log('完成：未平倉 '+d.stats.oiTot.toLocaleString('en-US')+' 口，對帳差 '+d.stats.recon);
+    $('dl').disabled = false;
+  } catch(e){
+    S.err = String(e); st('<span class="bad">失敗：'+S.err+'</span>'); log('失敗：'+S.err);
+  } finally {
+    S.done = true; S.phase = S.err ? 'error' : 'done';
+    $('go').disabled = false;
+  }
+}
+
+$('go').onclick = run;
+$('dl').onclick = () => { if (S.data) download(S.data, S.data.tradeDate.replace(/\D/g,'').replace(/^(\d\d)(\d\d)(\d{4})$/, '$3$1$2')); };
+
+const q = new URLSearchParams(location.search);
+if (q.get('d')) $('d').value = q.get('d');
+if (q.get('pause')) $('p').value = q.get('pause');
+if (q.get('auto') === '1') run();
+</script>
+</body>
+</html>
