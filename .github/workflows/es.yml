@@ -1,0 +1,77 @@
+name: ES 曝險地圖（原始檔上傳後自動建圖）
+
+# CME 擋掉 GitHub Actions 的 IP（純 Python 403、無頭 Chromium 走 HTTP/1.1 逾時），
+# 所以「抓資料」這一步只能在自己的機器上用瀏覽器做：
+#   開 tools/cme.html → 按開始抓 → 得到 raw/cme_ES.json → 上傳到 repo
+# 檔案一進 main，這個 workflow 就接手把圖算出來並提交 data/ES/。
+on:
+  push:
+    paths:
+      - 'raw/cme_ES.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gexmap-daily          # 跟每日更新同一組，不會同時寫 data/
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # 推送被拒時要能 rebase
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 不變量自我測試
+        run: python selftest.py
+
+      - name: 檢查原始檔
+        run: |
+          python - <<'PY'
+          import json, sys
+          d = json.load(open('raw/cme_ES.json', encoding='utf-8'))
+          n = sum(len(s.get('rows', [])) for s in d.get('series', []))
+          oi = sum(int(str(r[3]).replace(',', '') or 0)
+                   for s in d.get('series', []) for r in s.get('rows', []))
+          print(f"交易日 {d.get('tradeDate')}  系列 {len(d.get('series', []))}  "
+                f"契約 {n:,}  未平倉 {oi:,}  基準 {d.get('oiAsOf')}/{d.get('oiReport')}")
+          if not d.get('series'):
+              sys.exit('原始檔沒有任何系列')
+          if d.get('oiAsOf') != 'close':
+              sys.exit('未平倉不是當日收盤的（oiAsOf != close）——日選會嚴重低估，拒絕建圖')
+          bad = [s['code'] for s in d['series'] if s.get('oiSrc') not in ('F', 'P')]
+          if bad:
+              print(f"::warning::{len(bad)} 個系列的未平倉退回前一日：{' '.join(bad[:10])}")
+          PY
+
+      - name: 產生 ES 資料
+        run: python build.py --symbol ES --json raw/cme_ES.json
+
+      - name: 提交
+        run: |
+          if git diff --quiet -- data/; then
+            echo "資料沒有變動（可能是重複上傳同一天），跳過提交。"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          D=$(python -c "import json;print(json.load(open('data/ES/latest.json',encoding='utf-8'))['meta']['trade_date'])")
+          git commit -m "曝險地圖更新 ES $D"
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "推送成功（第 $i 次嘗試）"; exit 0
+            fi
+            echo "推送被拒，先取回遠端再 rebase（第 $i 次）"
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort || true; echo "::error::rebase 失敗，請手動處理"; exit 1; }
+            sleep 5
+          done
+          echo "::error::推送連續失敗三次"; exit 1
