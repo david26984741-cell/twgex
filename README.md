@@ -75,7 +75,17 @@ gh repo create twopt-gexmap --private --source=. --push
 | 台北時間 | 標的 | 備註 |
 |---|---|---|
 | 週一～五 15:15 | TXO | 一般交易時段 13:45 收盤，期交所盤後檔約 15:00 上架 |
-| 週一～五 21:20 | SPX / ES / SPY / QQQ | 美東夏令 09:20 / 冬令 08:20，抓的是**前一個**美股收盤 |
+| 週一～五 21:20 | SPX / SPY / QQQ | 美東夏令 09:20 / 冬令 08:20，抓的是**前一個**美股收盤 |
+
+**ES（CME 小型 S&P 期貨選擇權）不在排程裡。** CME 的邊緣節點擋掉 GitHub Actions 的 IP——
+純 Python 請求回 403、無頭 Chromium 走 HTTP/2 連線被重置、改走 HTTP/1.1 則 90 秒逾時（連試三次）。
+程式碼（`cme.py` / `cme_fetch.py`）與單元測試都留著，在一般網路環境下可以直接跑：
+
+```
+python cme_fetch.py --out raw/cme_ES.json
+python build.py --symbol ES --json raw/cme_ES.json
+```
+
 
 沒有保險班。期交所當天延遲上架的話，到 Actions 頁面按 **Run workflow** 補跑即可
 （輸入框留空 = 三個標的都跑，只想補台指就打 `TXO`）。
