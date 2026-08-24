@@ -5,7 +5,10 @@ on:
     # 台北 15:15（UTC+8）：台指。一般交易時段 13:45 收盤，期交所盤後檔通常 15:00 前後上架。
     # 只有這一班、沒有保險班——期交所當天若延遲上架，就自己按 Run workflow 補跑。
     - cron: '15 7 * * 1-5'
-    # 註：ES（CME）要用無頭 Chromium 代抓——CME 的網站 API 對非瀏覽器的請求回 HTTP 403。
+    # 註：ES（CME）不在排程裡。CME 的邊緣節點擋掉 GitHub Actions 的 IP：
+    #     純 Python 請求回 403、無頭 Chromium 走 HTTP/2 被重置、走 HTTP/1.1 則 90 秒逾時。
+    #     cme.py / cme_fetch.py 都留著且測試通過，在一般網路環境下可以跑：
+    #       python cme_fetch.py --out raw/cme_ES.json && python build.py --symbol ES --json raw/cme_ES.json
     # 美東 09:20（開盤前）：抓前一個交易日。此時 OCC 已把未平倉量更新完，
     # CBOE 的報價也還停在前一個收盤，兩邊指的是同一天。週一到週五各跑一次，抓的都是前一個交易日（OCC 每個營業日早上才發布前一日的未平倉量，
     # 所以週六跑會拿到過期的 OI；程式會從資料本身推斷 OI 是哪一天的並據此標示）。
@@ -45,11 +48,11 @@ jobs:
           if [ -n "${{ github.event.inputs.symbols }}" ]; then
             SYMS="${{ github.event.inputs.symbols }}"
           elif [ "${{ github.event.schedule }}" = "20 13 * * 1-5" ]; then
-            SYMS="SPX ES SPY QQQ"
+            SYMS="SPX SPY QQQ"
           elif [ -n "${{ github.event.schedule }}" ]; then
             SYMS="TXO"
           else
-            SYMS="TXO SPX ES SPY QQQ"
+            SYMS="TXO SPX SPY QQQ"
           fi
           echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
           echo "要更新：$SYMS"
