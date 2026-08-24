@@ -47,6 +47,7 @@ SPECS = {
         "price_note": "結算價",
         "tz_note": "美東時間收盤後更新",
         "spot_note": "主力月期貨結算價",
+        "s_label": "期貨",           # 這是期貨選擇權，沒有「現貨」這回事
     },
     "SPY": {
         "label": "SPY", "desc": "SPDR S&P 500 ETF",

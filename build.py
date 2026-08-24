@@ -328,6 +328,7 @@ def main() -> int:
             "source": spec["source"], "price_note": spec["price_note"],
             "tz_note": spec["tz_note"], "multiplier": mult,
             "s_ref": round(S_ref, 4), "s_ref_source": ref_src,
+            "s_label": spec.get("s_label", "現貨"),
             "n_legs": len(legs), "n_expiries": len(views) - 1,
             "oi_total": oi_used,
             "oi_coverage": round(oi_used / max(oi_used + oi_drop, 1), 5),

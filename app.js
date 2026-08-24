@@ -164,6 +164,8 @@ function applyMeta() {
 
 /* --------------------------------------------------------- 資料整形 */
 function view() { return S.data.views[S.exp] || S.data.views.ALL; }
+// 標的價的稱呼：指數 / ETF 是「現貨」，ES 這種期貨選擇權是「期貨」
+function spotWord() { return (S.data && S.data.meta && S.data.meta.s_label) || '現貨'; }
 
 function buckets() {
   const v = view(), S0 = S.data.meta.s_ref, b = S.bucket;
@@ -545,13 +547,13 @@ function drawSummary(rows, cv, flip, flipP) {
       <div class="s">${gTone}</div>
     </div>
     <div class="sumgrid">
-      <div class="tile"><div class="k">現貨 S</div><div class="v">${fmtP(S0)}</div><div class="s">${meta.s_ref_source}</div></div>
+      <div class="tile"><div class="k">${spotWord()} S</div><div class="v">${fmtP(S0)}</div><div class="s">${meta.s_ref_source}</div></div>
       <div class="tile"><div class="k">Gamma Flip</div>
         <div class="v" style="color:var(--flip)">${fmtP(flip)}</div>
-        <div class="s">距現貨 ${dist(flip)}</div></div>
+        <div class="s">距${spotWord()} ${dist(flip)}</div></div>
       <div class="tile"><div class="k">GEX+ Flip</div>
         <div class="v" style="color:var(--flip2)">${fmtP(flipP)}</div>
-        <div class="s">距現貨 ${dist(flipP)}・β=${S.beta.toFixed(1)}</div></div>
+        <div class="s">距${spotWord()} ${dist(flipP)}・β=${S.beta.toFixed(1)}</div></div>
       <div class="tile"><div class="k">總 VEX</div>
         <div class="v" style="font-size:17px;color:${totV >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(totV / E)}</div>
         <div class="s">${UNIT} / vol 點（vanna）</div></div>
@@ -616,7 +618,7 @@ function render() {
   const flipP = crossings(cvFull.x, cvFull.gexp, S0);
 
   const refs = [
-    { v: S0, color: 'var(--spot)', dash: '6 4', label: '現貨 ' + fmtP(S0) },
+    { v: S0, color: 'var(--spot)', dash: '6 4', label: spotWord() + ' ' + fmtP(S0) },
     { v: flip, color: 'var(--flip)', dash: '2 4', label: 'Gamma Flip ' + (flip == null ? '' : fmtP(flip)) },
     { v: flipP, color: 'var(--flip2)', dash: '2 4', label: 'GEX+ Flip ' + (flipP == null ? '' : fmtP(flipP)) },
   ];
@@ -627,11 +629,11 @@ function render() {
   const lg = (host, items) => { $(host).innerHTML = items.map(a => lgi(a[0], a[1], a[2])).join(''); };
 
   lg('#lgGex', [['var(--pos)', '正 GEX（穩定 / 壓回）'], ['var(--neg)', '負 GEX（放大 / 追價）'],
-                ['var(--spot)', '現貨', 1], ['var(--flip)', 'Gamma Flip', 1]]);
+                ['var(--spot)', spotWord(), 1], ['var(--flip)', 'Gamma Flip', 1]]);
   lg('#lgVex', [['var(--neg)', '負 VEX（波動上升 → 造市商賣出 → 放大）'], ['var(--pos)', '正 VEX'],
-                ['var(--spot)', '現貨', 1]]);
+                ['var(--spot)', spotWord(), 1]]);
   lg('#lgCurve', [['var(--curve1)', 'GEX'], ['var(--curve2)', `GEX+（β=${S.beta.toFixed(1)}）`],
-                  ['var(--spot)', '現貨', 1]]);
+                  ['var(--spot)', spotWord(), 1]]);
   lg('#lgExp', [['var(--pos)', 'GEX（長條）'], ['var(--curve2)', `GEX+（折線，β=${S.beta.toFixed(1)}）`]]);
 
   drawBars($('#chGex'), rows, r => gexOf(r, sg) / E,
