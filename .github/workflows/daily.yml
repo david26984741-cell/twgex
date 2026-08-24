@@ -44,11 +44,11 @@ jobs:
           if [ -n "${{ github.event.inputs.symbols }}" ]; then
             SYMS="${{ github.event.inputs.symbols }}"
           elif [ "${{ github.event.schedule }}" = "20 13 * * 1-5" ]; then
-            SYMS="SPY QQQ"
+            SYMS="SPX SPY QQQ"
           elif [ -n "${{ github.event.schedule }}" ]; then
             SYMS="TXO"
           else
-            SYMS="TXO SPY QQQ"
+            SYMS="TXO SPX SPY QQQ"
           fi
           echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
           echo "要更新：$SYMS"
