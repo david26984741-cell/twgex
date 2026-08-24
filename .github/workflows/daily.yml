@@ -5,8 +5,7 @@ on:
     # 台北 15:15（UTC+8）：台指。一般交易時段 13:45 收盤，期交所盤後檔通常 15:00 前後上架。
     # 只有這一班、沒有保險班——期交所當天若延遲上架，就自己按 Run workflow 補跑。
     - cron: '15 7 * * 1-5'
-    # 註：ES（CME）暫時不排程——CME 的網站 API 擋掉了非瀏覽器的請求（HTTP 403），
-    #     程式碼與測試都在，等改成用無頭瀏覽器抓再放回 SYMS。
+    # 註：ES（CME）要用無頭 Chromium 代抓——CME 的網站 API 對非瀏覽器的請求回 HTTP 403。
     # 美東 09:20（開盤前）：抓前一個交易日。此時 OCC 已把未平倉量更新完，
     # CBOE 的報價也還停在前一個收盤，兩邊指的是同一天。週一到週五各跑一次，抓的都是前一個交易日（OCC 每個營業日早上才發布前一日的未平倉量，
     # 所以週六跑會拿到過期的 OI；程式會從資料本身推斷 OI 是哪一天的並據此標示）。
@@ -46,21 +45,33 @@ jobs:
           if [ -n "${{ github.event.inputs.symbols }}" ]; then
             SYMS="${{ github.event.inputs.symbols }}"
           elif [ "${{ github.event.schedule }}" = "20 13 * * 1-5" ]; then
-            SYMS="SPX SPY QQQ"
+            SYMS="SPX ES SPY QQQ"
           elif [ -n "${{ github.event.schedule }}" ]; then
             SYMS="TXO"
           else
-            SYMS="TXO SPX SPY QQQ"
+            SYMS="TXO SPX ES SPY QQQ"
           fi
           echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
           echo "要更新：$SYMS"
+
+      - name: 安裝無頭瀏覽器（只有要跑 ES 時）
+        if: contains(steps.pick.outputs.syms, 'ES')
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
 
       - name: 產生資料
         run: |
           fail=0
           for s in ${{ steps.pick.outputs.syms }}; do
             echo "::group::$s"
-            if python build.py --symbol "$s"; then :; else
+            if [ "$s" = "ES" ]; then
+              # CME 擋非瀏覽器請求，先用無頭 Chromium 把結算表抓成檔案再餵給 build
+              if python cme_fetch.py --out raw/cme_ES.json \
+                 && python build.py --symbol ES --json raw/cme_ES.json; then :; else
+                echo "::warning::ES 更新失敗（CME 來源可能暫時不可用）"; fail=1
+              fi
+            elif python build.py --symbol "$s"; then :; else
               echo "::warning::$s 更新失敗（來源可能暫時不可用）"; fail=1
             fi
             echo "::endgroup::"
