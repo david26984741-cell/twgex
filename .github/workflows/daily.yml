@@ -44,11 +44,11 @@ jobs:
           if [ -n "${{ github.event.inputs.symbols }}" ]; then
             SYMS="${{ github.event.inputs.symbols }}"
           elif [ "${{ github.event.schedule }}" = "20 13 * * 1-5" ]; then
-            SYMS="SPX SPY QQQ"
+            SYMS="SPX ES SPY QQQ"
           elif [ -n "${{ github.event.schedule }}" ]; then
             SYMS="TXO"
           else
-            SYMS="TXO SPX SPY QQQ"
+            SYMS="TXO SPX ES SPY QQQ"
           fi
           echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
           echo "要更新：$SYMS"
@@ -77,7 +77,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/
           # 提交訊息帶上各標的實際的資料日期，從 commit 清單一眼就看得出這次有沒有抓到新的一天
-          DATES=$(python -c "import json,os;print(' / '.join(s+' '+json.load(open(os.path.join('data',s,'latest.json'),encoding='utf-8'))['meta']['trade_date'] for s in ('TXO','SPX','SPY','QQQ') if os.path.exists(os.path.join('data',s,'latest.json'))))")
+          DATES=$(python -c "import json,os;print(' / '.join(s+' '+json.load(open(os.path.join('data',s,'latest.json'),encoding='utf-8'))['meta']['trade_date'] for s in ('TXO','SPX','ES','SPY','QQQ') if os.path.exists(os.path.join('data',s,'latest.json'))))")
           git commit -m "曝險地圖更新 ${DATES:-$(date -u +%Y-%m-%d)}"
           # main 有可能在這次跑的期間被人推過（例如從網頁改了 app.js），
           # 直接 push 會被拒。失敗就 rebase 後重試，最多三次。
