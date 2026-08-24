@@ -140,6 +140,7 @@ function applyMeta() {
   mountBuckets();
   $('#mDate').textContent = m.trade_date;
   $('#mSpot').textContent = fmtP(m.s_ref);
+  $('#mSpotK').textContent = m.s_label || '現貨';
   $('#mLegs').textContent = fmtK(m.n_legs);
   $('#mExp').textContent = m.n_expiries;
   $('#mOI').textContent = fmtK(m.oi_total);
