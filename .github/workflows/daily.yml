@@ -68,19 +68,21 @@ jobs:
             fi
             echo "::endgroup::"
           done
-          if [ "$fail" = "1" ] && git diff --quiet -- data/; then
+          if [ "$fail" = "1" ] && [ -z "$(git status --porcelain -- data/)" ]; then
             echo "::error::全部標的都失敗且沒有任何資料變動"; exit 1
           fi
 
       - name: 提交
         run: |
-          if git diff --quiet -- data/; then
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # 一定要先 add 再比對：git diff 看不到「未追蹤」的新檔，
+          # 第一次建立 data/<新標的>/ 時會誤判成沒有變動而跳過提交。
+          git add -A data/
+          if git diff --cached --quiet -- data/; then
             echo "資料沒有變動（假日或來源尚未更新），跳過提交。"
             exit 0
           fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
           # 提交訊息帶上各標的實際的資料日期，從 commit 清單一眼就看得出這次有沒有抓到新的一天
           DATES=$(python -c "import json,os;print(' / '.join(s+' '+json.load(open(os.path.join('data',s,'latest.json'),encoding='utf-8'))['meta']['trade_date'] for s in ('TXO','SPX','ES','SPY','QQQ') if os.path.exists(os.path.join('data',s,'latest.json'))))")
           git commit -m "曝險地圖更新 ${DATES:-$(date -u +%Y-%m-%d)}"
