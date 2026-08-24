@@ -30,7 +30,21 @@ SYMBOLS = {
             "currency": "USD", "unit": "百萬美元", "unit_div": 1e6},
     "QQQ": {"name": "QQQ", "desc": "Invesco QQQ Trust", "multiplier": 100.0,
             "currency": "USD", "unit": "百萬美元", "unit_div": 1e6},
+    "_SPX": {"name": "SPX", "desc": "S&P 500 指數選擇權", "multiplier": 100.0,
+             "currency": "USD", "unit": "百萬美元", "unit_div": 1e6},
 }
+
+
+def osi_root(code: str) -> str:
+    """OSI 代號的標的根碼（後 15 碼固定是 到期6 + C/P + 履約價8）。
+
+    指數選擇權同一個到期日可能同時有兩種根碼，settlement 完全不同：
+      SPX  = AM 結算（每月第三個星期五「開盤」結算，最後交易日是前一天）
+      SPXW = PM 結算（週選 / 日選 / 月底選，當天收盤結算）
+    兩者在第三個星期五會撞在同一個到期日、而且履約價大量重疊，
+    不分開處理的話後讀到的那一批會把前一批整個蓋掉。
+    """
+    return code[:-15].strip()
 
 
 def fetch_json(symbol: str, timeout: int = 120) -> dict:
@@ -96,13 +110,26 @@ def oi_as_of(payload: dict, today: str) -> Optional[str]:
     return d0.strftime("%Y%m%d")
 
 
-def parse_chain(payload: dict, trade_day: Optional[str] = None) -> Tuple[Dict[str, dict], dict]:
+def parse_chain(payload: dict, trade_day: Optional[str] = None,
+                am_roots: tuple = (), prev_td=None) -> Tuple[Dict[str, dict], dict]:
     """回傳 (chain, meta)。chain 的結構跟 taifex.parse_options 的單日區塊一致，
     可以直接餵給 engine.build_legs。
 
     chain = {exp_code: {"ltd": date, "kind": str, "strikes": {K: {"C"/"P": {...}}}}}
-    美股選擇權的到期日就是最後交易日（SPY/QQQ 為 PM 結算，當天收盤結算）。
+    SPY / QQQ 是 PM 結算，到期日就是最後交易日。
+
+    am_roots: 哪些根碼屬於 AM 結算（例如 SPX 的 "SPX"）。這些序列會：
+      1. 用 <到期日>A 當 key，跟同一天的 PM 序列分開，避免履約價互相覆蓋
+      2. 最後交易日往前挪一個交易日（結算價是隔天開盤決定的）
+    prev_td: 取前一個交易日的函式，沒給就退回「前一天、跳過週末」。
     """
+    def _prev(d):
+        if prev_td:
+            return prev_td(d)
+        x = d - dt.timedelta(days=1)
+        while x.weekday() >= 5:
+            x -= dt.timedelta(days=1)
+        return x
     d = payload.get("data") or {}
     # 盤前抓取時 current_price 可能是盤前指示價，官方收盤價才是我們要的
     spot = d.get("close") or d.get("current_price") or d.get("prev_day_close")
@@ -123,8 +150,12 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None) -> Tuple[Dict[st
         if px is None or px <= 0:
             continue
         y, m, dd = int(exp[:4]), int(exp[4:6]), int(exp[6:8])
-        blk = chain.setdefault(exp, {"ltd": dt.date(y, m, dd),
-                                     "kind": expiry_kind(dt.date(y, m, dd)),
+        exp_date = dt.date(y, m, dd)
+        am = osi_root(code) in am_roots
+        key = exp + "A" if am else exp
+        blk = chain.setdefault(key, {"ltd": _prev(exp_date) if am else exp_date,
+                                     "kind": expiry_kind(exp_date) + ("・AM 結算" if am else ""),
+                                     "settle_date": exp_date, "am": am,
                                      "strikes": {}})
         blk["strikes"].setdefault(K, {})[cp] = {
             "settle": px, "close": o.get("last_trade_price"),

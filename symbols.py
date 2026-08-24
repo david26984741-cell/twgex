@@ -17,6 +17,22 @@ SPECS = {
         "price_note": "結算價",
         "tz_note": "台北時間收盤後更新",
     },
+    "SPX": {
+        "label": "SPX", "desc": "S&P 500 指數選擇權",
+        "market": "US", "multiplier": 100.0,
+        "currency": "US$", "unit": "百萬美元", "unit_div": 1e6,
+        "settle_next_day": False,           # 逐序列處理：AM 結算的那批已在解析時把 ltd 往前挪
+        "calendar": "calendar_us.txt",
+        "parity_band": 0.05,
+        "strike_band": 0.50,                # 美股的長天期履約價鋪得很開，帶寬太窄會把可觀的 GEX 留在圖外
+                                            # （±30% 時 QQQ 有 10.7%、SPY 3.0%、SPX 9.5% 在範圍外）
+        "default_view_band": 0.20,
+        "cboe_symbol": "_SPX",              # CDN 端點的指數代號要加底線
+        "am_roots": ("SPX",),               # SPX 根碼 = AM 結算；SPXW = PM 結算
+        "source": "CBOE 公開延遲報價（買賣中價）",
+        "price_note": "買賣中價",
+        "tz_note": "美東時間收盤後更新；未平倉量由 OCC 隔日發布",
+    },
     "SPY": {
         "label": "SPY", "desc": "SPDR S&P 500 ETF",
         "market": "US", "multiplier": 100.0,
@@ -24,7 +40,7 @@ SPECS = {
         "settle_next_day": False,           # PM 結算，最後交易日收盤即到期
         "calendar": "calendar_us.txt",
         "parity_band": 0.05,
-        "strike_band": 0.30,
+        "strike_band": 0.50,
         "default_view_band": 0.20,
         "source": "CBOE 公開延遲報價（買賣中價）",
         "price_note": "買賣中價",
@@ -37,7 +53,7 @@ SPECS = {
         "settle_next_day": False,
         "calendar": "calendar_us.txt",
         "parity_band": 0.05,
-        "strike_band": 0.30,
+        "strike_band": 0.50,
         "default_view_band": 0.20,
         "source": "CBOE 公開延遲報價（買賣中價）",
         "price_note": "買賣中價",
@@ -45,4 +61,4 @@ SPECS = {
     },
 }
 
-ORDER = ["TXO", "SPY", "QQQ"]
+ORDER = ["TXO", "SPX", "SPY", "QQQ"]

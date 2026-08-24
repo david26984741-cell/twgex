@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import random
 import sys
 
@@ -156,12 +157,45 @@ def data_tests(csv_path, date=None):
           f"上方 {sum(1 for x in hi_side if x<0)}/{len(hi_side)} 負")
 
 
+def chain_tests():
+    """指數選擇權的 AM / PM 結算分流（SPX 有 SPX 與 SPXW 兩種根碼）。"""
+    import cboe
+    hol = engine.load_holidays(os.path.join(os.path.dirname(os.path.abspath(__file__)), "calendar_us.txt"))
+    prev = lambda d: engine.prev_trading_day(d, hol)
+    o = lambda code, oi: {"option": code, "bid": 1.0, "ask": 1.2,
+                          "last_trade_price": 1.1, "open_interest": oi, "volume": 10}
+    payload = {"data": {"symbol": "^SPX", "close": 7674.37,
+                        "last_trade_time": "2026-08-21T16:15:00",
+                        "options": [
+                            o("SPX260918C07600000", 1111),      # AM 結算
+                            o("SPXW260918C07600000", 2222),     # 同一天的 PM 結算
+                            o("SPX   260918P07600000", 3333),   # 補空白的根碼也要認得
+                            o("SPXW260918P07600000", 4444),
+                            o("SPXW260824C07700000", 555),
+                            o("SPXW260824P07700000", 666)]}}
+    chain, _ = cboe.parse_chain(payload, "20260821", am_roots=("SPX",), prev_td=prev)
+    check("AM / PM 結算分成不同到期別 key", set(chain) == {"20260918A", "20260918", "20260824"},
+          str(sorted(chain)))
+    check("AM 結算的最後交易日往前挪一個交易日",
+          chain.get("20260918A", {}).get("ltd") == dt.date(2026, 9, 17)
+          and chain.get("20260918", {}).get("ltd") == dt.date(2026, 9, 18),
+          "AM 2026-09-17 / PM 2026-09-18")
+    tot = sum(r["oi"] for b in chain.values() for st in b["strikes"].values() for r in st.values())
+    check("同一到期日的 AM / PM 履約價不互相覆蓋", tot == 1111 + 2222 + 3333 + 4444 + 555 + 666,
+          f"未平倉總量 {tot}")
+    plain, _ = cboe.parse_chain(payload, "20260821")
+    check("沒給 am_roots 時維持 SPY / QQQ 的原本行為",
+          set(plain) == {"20260918", "20260824"}, str(sorted(plain)))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
     ap.add_argument("--date")
     a = ap.parse_args()
     math_tests()
+    print()
+    chain_tests()
     if a.csv:
         print()
         data_tests(a.csv, a.date)

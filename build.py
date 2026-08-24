@@ -169,14 +169,18 @@ def us_last_session(holidays) -> str:
 def load_us(args, sym):
     import cboe
     import symbols as _sc
-    payload = cboe.read_json_file(args.json) if args.json else cboe.fetch_json(sym)
-    hol = engine.load_holidays(os.path.join(HERE, _sc.SPECS[sym]["calendar"]))
+    spec0 = _sc.SPECS[sym]
+    payload = (cboe.read_json_file(args.json) if args.json
+               else cboe.fetch_json(spec0.get("cboe_symbol", sym)))
+    hol = engine.load_holidays(os.path.join(HERE, spec0["calendar"]))
     session = args.date or (None if args.json else us_last_session(hol))
     # 未平倉量可能還沒跟上（OCC 隔一個營業日才發布），用資料本身推斷它是哪一天的
     price_day = (payload.get("data", {}).get("last_trade_time") or "")[:10].replace("-", "")
     oi_day = cboe.oi_as_of(payload, price_day or session or "99999999")
     forced = oi_day or session
-    chain_all, meta = cboe.parse_chain(payload, forced)
+    chain_all, meta = cboe.parse_chain(
+        payload, forced, am_roots=spec0.get("am_roots", ()),
+        prev_td=lambda d: engine.prev_trading_day(d, hol))
     day = forced or meta["trade_day"]
     if oi_day and price_day and oi_day < price_day:
         print(f"  註：未平倉量為 {oi_day} 收盤（OCC 尚未發布 {price_day}），"
