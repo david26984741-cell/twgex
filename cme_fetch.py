@@ -137,12 +137,34 @@ def main() -> int:
 
     from playwright.sync_api import sync_playwright
 
+    UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
     with sync_playwright() as p:
-        br = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
-        ctx = br.new_context(locale="en-US", viewport={"width": 1440, "height": 900})
+        br = p.chromium.launch(args=[
+            "--no-sandbox", "--disable-dev-shm-usage",
+            # CME 的邊緣節點會把 headless Chromium 的 HTTP/2 連線打掉
+            # （net::ERR_HTTP2_PROTOCOL_ERROR），退回 HTTP/1.1 才連得上
+            "--disable-http2",
+            "--disable-blink-features=AutomationControlled",
+        ])
+        ctx = br.new_context(locale="en-US", viewport={"width": 1440, "height": 900},
+                             user_agent=UA,
+                             extra_http_headers={"Accept-Language": "en-US,en;q=0.9"})
+        ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         page = ctx.new_page()
-        print(f"載入 CME 頁面取得 cookie …", file=sys.stderr)
-        page.goto(a.base or SEED_URL, wait_until="domcontentloaded", timeout=90_000)
+        print("載入 CME 頁面取得 cookie …", file=sys.stderr)
+        last = None
+        for attempt in range(3):
+            try:
+                page.goto(a.base or SEED_URL, wait_until="domcontentloaded", timeout=90_000)
+                last = None
+                break
+            except Exception as e:                        # noqa: BLE001
+                last = e
+                print(f"  第 {attempt+1} 次載入失敗：{str(e).splitlines()[0]}", file=sys.stderr)
+                page.wait_for_timeout(4000)
+        if last is not None:
+            raise last
         page.wait_for_timeout(6000)                      # 等 Akamai 的 script 跑完
         print(f"開始抓 {a.symbol} {td} 的結算表 …", file=sys.stderr)
         data = page.evaluate(JS, {"futProduct": FUT_PRODUCT[a.symbol], "tradeDate": td,
