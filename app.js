@@ -39,23 +39,49 @@ const gexOf = (r, sg) => sg.c * r.gc + sg.p * r.gp;
 const vexOf = (r, sg) => sg.c * r.wc + sg.p * r.wp;
 const vegaOf = (r, sg) => sg.c * r.vc + sg.p * r.vp;
 
-/* --------------------------------------------------------- 取資料 */
+/* --------------------------------------------------------- 取資料
+   同一份 JSON 在一次瀏覽裡只抓一次。SPX 的 latest.json 解開有 2.6 MB，
+   以前每次切分頁都重抓（cache: no-store），光網路來回就要 1.4 秒——
+   那才是「切換很卡」的主因，不是繪圖。快取存的是 Promise，所以
+   「滑過去先抓」與「點下去要用」不會變成兩個請求。 */
+const CACHE = new Map();
+
+function getJson(url, must) {
+  if (CACHE.has(url)) return CACHE.get(url);
+  const p = fetch(url, { cache: 'no-cache' })       // 仍會跟伺服器確認新舊，只是不重下載整包
+    .then(r => {
+      if (!r.ok) {
+        if (must) throw new Error(`讀不到 ${url}（HTTP ${r.status}）`);
+        return null;
+      }
+      return r.json();
+    });
+  p.catch(() => CACHE.delete(url));                 // 失敗不要留在快取裡，下次還能重試
+  CACHE.set(url, p);
+  return p;
+}
+
+const dataUrl = (sym, day) =>
+  day ? `data/${sym}/history/${day}.json` : `data/${sym}/latest.json`;
+
 async function load(sym, day) {
   if (window.__GEXMAP__ && !day) return window.__GEXMAP__;
-  const url = day ? `data/${sym}/history/${day}.json` : `data/${sym}/latest.json`;
-  const r = await fetch(url, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`讀不到 ${url}（HTTP ${r.status}）`);
-  return r.json();
+  return getJson(dataUrl(sym, day), true);
 }
 
-async function loadJson(url) {
-  if (window.__GEXMAP__) return null;
-  try { const r = await fetch(url, { cache: 'no-store' }); return r.ok ? r.json() : null; }
-  catch (e) { return null; }
+function loadJson(url) {
+  if (window.__GEXMAP__) return Promise.resolve(null);
+  return getJson(url, false).catch(() => null);
 }
 
-async function mountDates() {
-  const idx = await loadJson(`data/${S.sym}/index.json`);
+// 滑鼠移到分頁上（或手指按下）就先開始抓，等真的點下去時通常已經到了
+function prefetch(sym) {
+  if (window.__GEXMAP__ || !sym) return;
+  loadJson(dataUrl(sym));
+  loadJson(`data/${sym}/index.json`);
+}
+
+function mountDates(idx) {
   const sel = $('#selDate');
   if (!idx || !idx.dates || idx.dates.length < 2) { $('#ctlDate').style.display = 'none'; return; }
   const cur = S.data.meta.trade_date.replace(/\//g, '');
@@ -67,12 +93,14 @@ async function mountDates() {
 async function switchTo(sym, day) {
   const box = $('#err');
   try {
+    // 兩個請求同時發：以前是先等資料再等日期清單，兩段來回加起來要一秒多
+    const idxP = loadJson(`data/${sym}/index.json`);
     S.data = await load(sym, day);
     S.sym = sym;
     if (!day) S.exp = 'ALL';
     applyMeta();
     mountExpiries();
-    await mountDates();
+    mountDates(await idxP);
     methodology();
     howto();
     render();
@@ -318,6 +346,35 @@ let tipShownAt = 0;
 addEventListener('scroll', () => { if (Date.now() - tipShownAt > 500) hideTip(); }, { passive: true });
 
 /* --------------------------------------------------------- 長條圖 */
+/* 一個委派的感應層，取代「每根長條各自一個透明矩形 + 四個事件」。
+   SPX 一張圖有 500 多根，逐根綁會多出 500 個節點與 2,000 個監聽器，
+   而且每次重繪（換 β、換慣例、換字級）都要整批重建。 */
+function hoverBars(svg, g, geo, bars, locate, tipOf) {
+  const hit = el('rect', { x: 0, y: 0, width: geo.iw, height: geo.ih, fill: 'transparent' }, g);
+  let cur = -1;
+  const off = () => { if (cur >= 0 && bars[cur]) bars[cur].removeAttribute('opacity'); cur = -1; };
+  const move = (ev) => {
+    const p = ev.touches ? ev.touches[0] : ev;
+    if (!p) return;
+    const box = svg.getBoundingClientRect();
+    if (!box.width) return;
+    const vw = (svg.viewBox && svg.viewBox.baseVal.width) || box.width;
+    const i = locate((p.clientX - box.left) * (vw / box.width) - geo.left);
+    if (i < 0 || i >= bars.length) { off(); hideTip(); return; }
+    if (i !== cur) { off(); cur = i; bars[i].setAttribute('opacity', .72); }
+    showTip(ev, tipOf(i));
+  };
+  hit.addEventListener('mouseenter', move);
+  hit.addEventListener('mousemove', move);
+  hit.addEventListener('touchstart', move, { passive: true });
+  hit.addEventListener('touchmove', move, { passive: true });
+  hit.addEventListener('mouseleave', () => {
+    if (justTouched()) return;                 // 觸控後補送的滑鼠事件不要把 tooltip 關掉
+    off(); hideTip();
+  });
+  return hit;
+}
+
 function drawBars(host, rows, valueFn, colorFn, opts) {
   host.innerHTML = '';
   const F = fsScale(), nar = isNarrow();
@@ -354,27 +411,33 @@ function drawBars(host, rows, valueFn, colorFn, opts) {
     el('text', { class: 'ax', x: x(t), y: ih + 18 * F, 'text-anchor': 'middle' }, g).textContent = fmtA(t);
   }
 
-  rows.forEach((r, i) => {
-    const v = valueFn(r), xx = x(r.K) - bw / 2;
-    const p = el('path', { d: barPath(xx, bw, y(0), y(v)), fill: colorFn(r, v), 'shape-rendering': 'geometricPrecision' }, g);
-    const hit = el('rect', { x: xx - 1, y: 0, width: bw + 2, height: ih, fill: 'transparent' }, g);
-    const on = (ev) => { p.setAttribute('opacity', .72); showTip(ev, opts.tip(r, v)); };
-    hit.addEventListener('mouseenter', on); hit.addEventListener('mousemove', on);
-    hit.addEventListener('touchstart', on, { passive: true });
-    hit.addEventListener('mouseleave', () => {
-      if (justTouched()) return;                 // 觸控後補送的滑鼠事件不要把 tooltip 關掉
-      p.removeAttribute('opacity'); hideTip();
-    });
+  const vs = [], bars = rows.map((r, i) => {
+    const v = valueFn(r); vs.push(v);
+    return el('path', { d: barPath(x(r.K) - bw / 2, bw, y(0), y(v)),
+                        fill: colorFn(r, v), 'shape-rendering': 'geometricPrecision' }, g);
   });
 
   (opts.refs || []).forEach((rf, i) => {
     if (rf.v == null || rf.v < kMin - step || rf.v > kMax + step) return;
     const xx = x(rf.v);
-    el('line', { x1: xx, x2: xx, y1: -m.t + 6, y2: ih, stroke: rf.color, 'stroke-width': 2, 'stroke-dasharray': rf.dash }, g);
+    el('line', { x1: xx, x2: xx, y1: -m.t + 6, y2: ih, stroke: rf.color, 'stroke-width': 2,
+                 'stroke-dasharray': rf.dash, 'pointer-events': 'none' }, g);
     const at = xx > iw - (nar ? 70 : 96) * F;      // 靠右邊界就把標籤翻到左側
     el('text', { class: 'ax', x: xx + (at ? -5 : 5), y: -m.t + (15 + i * 12.5) * F, fill: rf.color,
-                 'text-anchor': at ? 'end' : 'start' }, g).textContent = rf.label;
+                 'text-anchor': at ? 'end' : 'start', 'pointer-events': 'none' }, g)
+      .textContent = rf.label;
   });
+
+  // 由 x 反推最接近的那一根（rows 依履約價排序，二分搜尋即可；不假設格點連續）
+  const locate = (px) => {
+    if (px < 0 || px > iw) return -1;
+    const k = kMin - step / 2 + (px / iw) * (kMax - kMin + step);
+    let a = 0, b2 = rows.length - 1;
+    while (a < b2) { const mid = (a + b2) >> 1; if (rows[mid].K < k) a = mid + 1; else b2 = mid; }
+    if (a > 0 && Math.abs(rows[a - 1].K - k) < Math.abs(rows[a].K - k)) a--;
+    return Math.abs(rows[a].K - k) <= step ? a : -1;   // 離最近的長條超過一格就當沒指到
+  };
+  hoverBars(svg, g, { iw, ih, left: m.l }, bars, locate, i => opts.tip(rows[i], vs[i]));
 }
 
 /* --------------------------------------------------------- 折線圖 */
@@ -484,37 +547,30 @@ function drawExpiry(host) {
   el('line', { class: 'zero', x1: 0, x2: iw, y1: y(0), y2: y(0) }, g);
   el('text', { class: 'axname', x: -m.l + 4, y: -6 }, g).textContent = UNIT + ' / 1%';
 
-  rows.forEach((r, i) => {
-    const cx = cw * (i + 0.5), x0 = cx - bw / 2;
-    const p = el('path', { d: barPath(x0, bw, y(0), y(r.gex)),
+  const bars = rows.map((r, i) => {
+    const cx = cw * (i + 0.5);
+    const p = el('path', { d: barPath(cx - bw / 2, bw, y(0), y(r.gex)),
                            fill: r.gex >= 0 ? 'var(--pos)' : 'var(--neg)' }, g);
-    const hit = el('rect', { x: cw * i, y: 0, width: cw, height: ih, fill: 'transparent' }, g);
-    const on = (ev) => {
-      p.setAttribute('opacity', .72);
-      showTip(ev, `<div class="t">${r.ltd}　${r.kind}　${r.code}</div>
-        <div class="r"><span>GEX</span><span>${fmt(r.gex)} ${UNIT} / 1%</span></div>
-        <div class="r"><span>VEX</span><span>${fmt(r.vex)} ${UNIT} / vol 點</span></div>
-        <div class="r"><span>GEX+（β=${S.beta.toFixed(1)}）</span><span>${fmt(r.gexp)}</span></div>
-        <div class="r"><span>剩餘交易日</span><span>${r.trading_days}</span></div>
-        <div class="r"><span>未平倉</span><span>${fmtK(r.oi)} 口</span></div>
-        <div class="r"><span>ATM 隱含波動率</span><span>${r.atm_iv == null ? '—' : (r.atm_iv * 100).toFixed(2) + '%'}</span></div>`);
-    };
-    hit.addEventListener('mouseenter', on); hit.addEventListener('mousemove', on);
-    hit.addEventListener('touchstart', on, { passive: true });
-    hit.addEventListener('mouseleave', () => {
-      if (justTouched()) return;
-      p.removeAttribute('opacity'); hideTip();
-    });
-    const tx = el('text', { class: 'ax', x: cx, y: ih + 16 * F, 'text-anchor': 'end',
-                            transform: `rotate(-38 ${cx} ${ih + 16 * F})` }, g);
-    tx.textContent = r.ltd;
+    el('text', { class: 'ax', x: cx, y: ih + 16 * F, 'text-anchor': 'end',
+                 transform: `rotate(-38 ${cx} ${ih + 16 * F})` }, g).textContent = r.ltd;
+    return p;
   });
 
   const d = rows.map((r, i) => (i ? 'L' : 'M') + (cw * (i + 0.5)).toFixed(1) + ' ' + y(r.gexp).toFixed(1)).join('');
   el('path', { d, fill: 'none', stroke: 'var(--curve2)', 'stroke-width': 2, 'stroke-linecap': 'round' }, g);
   rows.forEach((r, i) => el('circle', {
     cx: cw * (i + 0.5), cy: y(r.gexp), r: 4, fill: 'var(--curve2)',
-    stroke: 'var(--surface)', 'stroke-width': 2 }, g));
+    stroke: 'var(--surface)', 'stroke-width': 2, 'pointer-events': 'none' }, g));
+
+  hoverBars(svg, g, { iw, ih, left: m.l }, bars,
+    px => (px < 0 || px > iw) ? -1 : Math.floor(px / cw),
+    i => { const r = rows[i]; return `<div class="t">${r.ltd}　${r.kind}　${r.code}</div>
+        <div class="r"><span>GEX</span><span>${fmt(r.gex)} ${UNIT} / 1%</span></div>
+        <div class="r"><span>VEX</span><span>${fmt(r.vex)} ${UNIT} / vol 點</span></div>
+        <div class="r"><span>GEX+（β=${S.beta.toFixed(1)}）</span><span>${fmt(r.gexp)}</span></div>
+        <div class="r"><span>剩餘交易日</span><span>${r.trading_days}</span></div>
+        <div class="r"><span>未平倉</span><span>${fmtK(r.oi)} 口</span></div>
+        <div class="r"><span>ATM 隱含波動率</span><span>${r.atm_iv == null ? '—' : (r.atm_iv * 100).toFixed(2) + '%'}</span></div>`; });
 }
 
 /* --------------------------------------------------------- 摘要面板 */
@@ -580,7 +636,13 @@ function drawSummary(rows, cv, flip, flipP) {
 }
 
 /* --------------------------------------------------------- 表格 */
+/* 兩張表都收在 <details> 裡，預設是關的。SPX 有 500 多列 × 9 欄 ＝ 近 5,000 個節點，
+   佔整頁節點的六成，而且每次換 β、換慣例、換字級都要重建一次——沒人在看的時候不必建。 */
+let tblDirty = true, expTblDirty = true;
+
 function drawTable(rows) {
+  if (!$('#dTable').open) { tblDirty = true; return; }
+  tblDirty = false;
   const sg = SIGNS[S.sign];
   $('#tbl').querySelector('thead').innerHTML =
     `<tr><th>履約價</th><th>GEX（${UNIT}/1%）</th><th>VEX（${UNIT}/vol點）</th><th>vega 曝險</th>` +
@@ -597,6 +659,8 @@ function drawTable(rows) {
 }
 
 function drawExpTable() {
+  if (!$('#dExp').open) { expTblDirty = true; return; }
+  expTblDirty = false;
   $('#tblExp').querySelector('thead').innerHTML =
     '<tr><th>到期別</th><th>類型</th><th>最後交易日</th><th>剩餘交易日</th><th>遠期價</th>' +
     '<th>ATM IV</th><th>偏斜 dσ/dlnK</th><th>未平倉</th><th>GEX</th><th>VEX</th></tr>';
@@ -667,6 +731,15 @@ function render() {
 }
 
 /* --------------------------------------------------------- 事件 */
+/* β 拉桿一路拖會連發數十個 input 事件，每一發都整頁重畫。
+   併到同一個動畫影格，畫面只會跟著更新一次。 */
+let rafQueued = false;
+function renderSoon() {
+  if (rafQueued) return;
+  rafQueued = true;
+  requestAnimationFrame(() => { rafQueued = false; render(); });
+}
+
 function segment(host, key, cast, after) {
   if (!host) return;
   host.addEventListener('click', (ev) => {
@@ -736,11 +809,13 @@ function mountExpiries() {
   const seg = $('#segExp'), sel = $('#selExp'), ex = S.data.expiries;
   if (!S.data.views[S.exp]) S.exp = 'ALL';
   if (ex.length > (isNarrow() ? 5 : 12)) {    // 到期別太多（或螢幕太窄）就改用下拉
-    seg.style.display = 'none'; sel.style.display = '';
+    seg.style.display = 'none'; seg.innerHTML = '';   // 舊標的的按鈕不要留在 DOM 裡
+    sel.style.display = '';
     sel.innerHTML = `<option value="ALL">合併（全部 ${ex.length} 個）</option>` +
       ex.map(e => `<option value="${e.code}"${e.code === S.exp ? ' selected' : ''}>${e.ltd}　${e.kind}　${fmtK(e.oi)} 口</option>`).join('');
   } else {
-    sel.style.display = 'none'; seg.style.display = '';
+    sel.style.display = 'none'; sel.innerHTML = '';
+    seg.style.display = '';
     seg.innerHTML = `<button data-v="ALL">合併</button>` +
       ex.map(e => `<button data-v="${e.code}" title="${e.kind}・到期 ${e.ltd}・${fmtK(e.oi)} 口">${e.ltd.slice(5)}</button>`).join('');
     [...seg.querySelectorAll('button')].forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.exp));
@@ -1018,6 +1093,9 @@ function applyFs(v) {
     const b = ev.target.closest('button'); if (!b) return;
     switchTo(b.dataset.v);
   });
+  const warm = ev => { const b = ev.target.closest('button'); if (b) prefetch(b.dataset.v); };
+  $('#segSym').addEventListener('pointerover', warm);
+  $('#segSym').addEventListener('touchstart', warm, { passive: true });
 
   const pref = loadPref();
   applyFs(pref.fs || 1);
@@ -1047,9 +1125,26 @@ function applyFs(v) {
   $('#selBand').addEventListener('change', e => { S.band = +e.target.value; mountBuckets(); render(); });
   $('#selBucket').addEventListener('change', e => { S.bucket = parseFloat(e.target.value); render(); });
   $('#rngBeta').addEventListener('input', e => {
-    S.beta = +e.target.value; $('#valBeta').textContent = S.beta.toFixed(1); render();
+    S.beta = +e.target.value; $('#valBeta').textContent = S.beta.toFixed(1); renderSoon();
+  });
+  // 表格展開時才補畫（收起來的時候 drawTable / drawExpTable 會直接跳過）
+  $('#dTable').addEventListener('toggle', () => {
+    if ($('#dTable').open && tblDirty) drawTable(buckets());
+  });
+  $('#dExp').addEventListener('toggle', () => {
+    if ($('#dExp').open && expTblDirty) drawExpTable();
   });
   let t; const redraw = () => { clearTimeout(t); t = setTimeout(() => { mountExpiries(); render(); }, 160); };
   addEventListener('resize', redraw);
   addEventListener('orientationchange', redraw);
+
+  // 第一頁畫完之後，趁瀏覽器空檔把其他標的也先抓好，之後切分頁就不用等網路。
+  // 省流量模式或慢速連線就不做——這幾份加起來壓縮後約 2 MB。
+  const net = navigator.connection || {};
+  if (!window.__GEXMAP__ && !net.saveData && !/2g/.test(net.effectiveType || '')) {
+    const rest = syms.map(x => x.code).filter(c => c !== S.sym);
+    const idle = window.requestIdleCallback || (f => setTimeout(f, 1200));
+    const next = () => { const c = rest.shift(); if (!c) return; prefetch(c); idle(next, { timeout: 5000 }); };
+    idle(next, { timeout: 5000 });
+  }
 })();
