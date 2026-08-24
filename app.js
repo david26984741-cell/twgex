@@ -179,9 +179,20 @@ function applyMeta() {
   const warn = $('#dateWarn');
   if (m.oi_as_of && m.price_as_of && m.oi_as_of !== m.price_as_of) {
     warn.style.display = '';
-    warn.innerHTML = `<b>未平倉量與報價不同日：</b>未平倉量為 <b>${m.oi_as_of}</b> 收盤，` +
-      `報價為 <b>${m.price_as_of}</b> 收盤。本頁以未平倉日標示，隱含波動率則來自較新的那組報價。` +
-      `（OCC 每個營業日早上才發布前一日的未平倉量，排程若在發布前跑就會出現這個情況。）`;
+    // 報價到底是「前一個收盤」還是「當天盤中」，差很多。用 CBOE 給的報價時間判斷。
+    const t = /T(\d\d):(\d\d)/.exec(m.quote_time || '');
+    const mins = t ? (+t[1]) * 60 + (+t[2]) : null;
+    const intra = mins != null && mins >= 9 * 60 + 30 && mins < 16 * 60;   // 美東 09:30–16:00
+    const when = t ? `${m.price_as_of} ${t[1]}:${t[2]}（美東）` : m.price_as_of;
+    warn.innerHTML = intra
+      ? `<b>報價是盤中的，未平倉量是前一個收盤的：</b>未平倉量為 <b>${m.oi_as_of}</b> 收盤，` +
+        `報價取自 <b>${when}</b> 的<b>盤中</b>報價。` +
+        `隱含波動率、gamma、vanna 都跟著較新的報價走，未平倉量還停在前一天，` +
+        `<b>兩者不是同一個時點</b>——當成「用昨天的部位、看今天的價格」來讀，不要當成前一日的收盤地圖。` +
+        `（成因是排程被延遲到美股開盤之後才跑。）`
+      : `<b>未平倉量與報價不同日：</b>未平倉量為 <b>${m.oi_as_of}</b> 收盤，` +
+        `報價為 <b>${when}</b>。本頁以未平倉日標示，隱含波動率則來自較新的那組報價。` +
+        `（OCC 每個營業日早上才發布前一日的未平倉量，排程若在發布前跑就會出現這個情況。）`;
   } else { warn.style.display = 'none'; }
   renderSymNote(m.symbol);
   $('#nGex').textContent = UNIT + ' / 標的移動 1%';
@@ -641,7 +652,11 @@ function drawSummary(rows, cv, flip, flipP) {
 let tblDirty = true, expTblDirty = true;
 
 function drawTable(rows) {
-  if (!$('#dTable').open) { tblDirty = true; return; }
+  if (!$('#dTable').open) {                 // 收起來時連舊內容都清掉，不然上一個標的的列會一直佔著 DOM
+    tblDirty = true;
+    $('#tbl').querySelector('tbody').innerHTML = '';
+    return;
+  }
   tblDirty = false;
   const sg = SIGNS[S.sign];
   $('#tbl').querySelector('thead').innerHTML =
@@ -659,7 +674,11 @@ function drawTable(rows) {
 }
 
 function drawExpTable() {
-  if (!$('#dExp').open) { expTblDirty = true; return; }
+  if (!$('#dExp').open) {
+    expTblDirty = true;
+    $('#tblExp').querySelector('tbody').innerHTML = '';
+    return;
+  }
   expTblDirty = false;
   $('#tblExp').querySelector('thead').innerHTML =
     '<tr><th>到期別</th><th>類型</th><th>最後交易日</th><th>剩餘交易日</th><th>遠期價</th>' +
@@ -1129,10 +1148,12 @@ function applyFs(v) {
   });
   // 表格展開時才補畫（收起來的時候 drawTable / drawExpTable 會直接跳過）
   $('#dTable').addEventListener('toggle', () => {
-    if ($('#dTable').open && tblDirty) drawTable(buckets());
+    if ($('#dTable').open) { if (tblDirty) drawTable(buckets()); }
+    else drawTable(null);                   // 收起就清空
   });
   $('#dExp').addEventListener('toggle', () => {
-    if ($('#dExp').open && expTblDirty) drawExpTable();
+    if ($('#dExp').open) { if (expTblDirty) drawExpTable(); }
+    else drawExpTable();
   });
   let t; const redraw = () => { clearTimeout(t); t = setTimeout(() => { mountExpiries(); render(); }, 160); };
   addEventListener('resize', redraw);
