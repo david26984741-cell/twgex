@@ -188,6 +188,39 @@ def chain_tests():
           set(plain) == {"20260918", "20260824"}, str(sorted(plain)))
 
 
+def cme_tests():
+    """CME 結算表的解析：價格字串、季月選（美式）的最後交易日往前挪、同日不同系列不互蓋。"""
+    import cme
+    hol = engine.load_holidays(os.path.join(os.path.dirname(os.path.abspath(__file__)), "calendar_us.txt"))
+    prev = lambda d: engine.prev_trading_day(d, hol)
+    check("結算價字串解析", [cme._num(x) for x in ["7591.25", "1,234.50", "CAB", "-", "", "123.00B", None]]
+          == [7591.25, 1234.50, 0.05, None, None, 123.00, None], "含千分位 / CAB / 買賣價尾綴")
+    dump = {"tradeDate": "08/21/2026", "futures": [["SEP 26", "7691.25", "2,019,214"]],
+            "series": [
+                # 第三個星期五：季月選（美式）與第三週的週五週選同一天到期
+                {"code": "ESU26", "name": "E-mini S&P 500 Options", "type": "AME",
+                 "lastTrade": "18 Sep 2026",
+                 "rows": [["7600.00", "Call", "250.00", "1,111", "10"],
+                          ["7600.00", "Put", "180.00", "2,222", "5"]]},
+                {"code": "EW3U26", "name": "E-mini S&P 500 Friday Weekly Options", "type": "E21",
+                 "lastTrade": "18 Sep 2026",
+                 "rows": [["7600.00", "Call", "249.00", "3,333", "8"],
+                          ["7600.00", "Put", "179.00", "4,444", "3"]]},
+                # 已到期的要被丟掉
+                {"code": "EW3Q26", "name": "E-mini S&P 500 Friday Weekly Options", "type": "E21",
+                 "lastTrade": "21 Aug 2026",
+                 "rows": [["7600.00", "Call", "1.00", "9,999", "0"]]}]}
+    chain, meta = cme.chain_from_dump(dump, prev_td=prev)
+    check("同一天到期的不同系列各自成一格", set(chain) == {"ESU26", "EW3U26"}, str(sorted(chain)))
+    check("季月選（美式）最後交易日往前挪一個交易日",
+          chain.get("ESU26", {}).get("ltd") == dt.date(2026, 9, 17)
+          and chain.get("EW3U26", {}).get("ltd") == dt.date(2026, 9, 18),
+          "ESU26 2026-09-17 / EW3U26 2026-09-18")
+    tot = sum(r["oi"] for b in chain.values() for st in b["strikes"].values() for r in st.values())
+    check("履約價不互相覆蓋、已到期系列被排除", tot == 1111 + 2222 + 3333 + 4444, f"未平倉 {tot}")
+    check("參考價取未平倉最大的期貨結算價", meta["spot"] == 7691.25, str(meta["spot"]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
@@ -196,6 +229,8 @@ def main():
     math_tests()
     print()
     chain_tests()
+    print()
+    cme_tests()
     if a.csv:
         print()
         data_tests(a.csv, a.date)

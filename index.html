@@ -162,6 +162,10 @@ tbody tr:hover{background:#141d29}
 }
 #err{display:none;background:#2a1416;border:1px solid #5c2b2f;border-radius:10px;padding:14px 16px;color:#f0c9c9}
 .notice{background:#241c0c;border:1px solid #5c4a1f;border-radius:10px;padding:11px 14px;color:#e8d5a6;font-size:calc(12.5px * var(--fs));line-height:1.7;margin-bottom:14px}
+.symnote{background:#0f1a24;border:1px solid #24435c;border-radius:10px;padding:11px 14px;color:#b9d4e6;
+         font-size:calc(12.5px * var(--fs));line-height:1.75;margin-bottom:14px}
+.symnote b{color:#e6f2fa}
+.symnote .sz{color:#7f96a8;display:block;margin-top:4px;font-size:calc(11.5px * var(--fs))}
 </style>
 </head>
 <body>
@@ -175,6 +179,7 @@ tbody tr:hover{background:#141d29}
   <div class="src" id="mSrc">—</div>
 
   <div id="err"></div>
+  <div id="symNote" class="symnote" style="display:none"></div>
   <div id="dateWarn" class="notice" style="display:none"></div>
 
   <div class="controls">

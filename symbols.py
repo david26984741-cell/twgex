@@ -33,6 +33,20 @@ SPECS = {
         "price_note": "買賣中價",
         "tz_note": "美東時間收盤後更新；未平倉量由 OCC 隔日發布",
     },
+    "ES": {
+        "label": "ES", "desc": "CME 小型 S&P 500 期貨選擇權",
+        "market": "US", "multiplier": 50.0,
+        "currency": "US$", "unit": "百萬美元", "unit_div": 1e6,
+        "settle_next_day": False,           # 逐系列處理：季月選（美式）已在解析時把 ltd 往前挪
+        "calendar": "calendar_us.txt",
+        "parity_band": 0.05,
+        "strike_band": 0.50,
+        "default_view_band": 0.20,
+        "venue": "CME",
+        "source": "CME 公開結算表（Settlements / Options）",
+        "price_note": "結算價",
+        "tz_note": "美東時間收盤後更新",
+    },
     "SPY": {
         "label": "SPY", "desc": "SPDR S&P 500 ETF",
         "market": "US", "multiplier": 100.0,
@@ -61,4 +75,4 @@ SPECS = {
     },
 }
 
-ORDER = ["TXO", "SPX", "SPY", "QQQ"]
+ORDER = ["TXO", "SPX", "ES", "SPY", "QQQ"]

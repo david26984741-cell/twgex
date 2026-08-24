@@ -205,6 +205,36 @@ def load_us(args, sym):
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 
+def load_cme(args, sym):
+    """CME 期貨選擇權（ES）。可用 --json 餵離線抓好的原始結算表。"""
+    import cme
+    import symbols as _sc
+    spec0 = _sc.SPECS[sym]
+    hol = engine.load_holidays(os.path.join(HERE, spec0["calendar"]))
+    prev = lambda d: engine.prev_trading_day(d, hol)
+    if args.json:
+        chain, meta = cme.chain_from_dump(cme.read_json_file(args.json), prev_td=prev)
+        day = args.date or meta["trade_day"]
+    else:
+        day = args.date or us_last_session(hol)
+        chain, meta = cme.fetch_chain(day, sym, prev_td=prev)
+    prev_oi = {}
+    prior = None
+    hist = os.path.join(DATA, sym, "history")
+    if os.path.isdir(hist):
+        past = sorted(f[:-5] for f in os.listdir(hist) if f.endswith(".json") and f[:-5] < day)
+        if past:
+            prior = past[-1]
+            old = json.load(open(os.path.join(hist, prior + ".json"), encoding="utf-8"))
+            for r in old["views"]["ALL"]["strikes"]:
+                prev_oi[("*", r["K"], "C")] = r["oc"]
+                prev_oi[("*", r["K"], "P")] = r["op"]
+    extra = {"n_contracts_all": meta.get("n_contracts_all"),
+             "n_requests": meta.get("n_requests"),
+             "futures": (meta.get("futures") or [])[:6]}
+    return day, chain, prev_oi, args.spot or meta.get("spot"), prior, extra
+
+
 # --------------------------------------------------------------------------- 主流程
 
 def main() -> int:
@@ -218,8 +248,13 @@ def main() -> int:
 
     sym = args.symbol
     spec = symcfg.SPECS[sym]
-    day, chain, prev_oi, spot, prior, extra = (
-        load_tw(args) if spec["market"] == "TW" else load_us(args, sym))
+    if spec["market"] == "TW":
+        loader = load_tw(args)
+    elif spec.get("venue") == "CME":
+        loader = load_cme(args, sym)
+    else:
+        loader = load_us(args, sym)
+    day, chain, prev_oi, spot, prior, extra = loader
     if not chain:
         print(f"{sym}: 沒有未到期的契約", file=sys.stderr)
         return 1

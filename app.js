@@ -84,6 +84,49 @@ async function switchTo(sym, day) {
   }
 }
 
+
+/* --------------------------------------------------------- 各標的的身分說明
+   同一個指數在不同交易所有不同的一本帳，結算方式也不同。這段是為了讓看圖的人
+   一眼知道「這張圖畫的是哪一本帳」，不要拿 A 的地圖去走 B 的路。
+   量級數字量測於 2026/08/21 收盤，會隨時間變動，只當數量級參考。 */
+const SYM_NOTES = {
+  TXO: {
+    what: '臺灣期貨交易所的<b>台指選擇權</b>（TXO），<b>現金結算</b>，每口 = 指數 × NT$50。',
+    more: '最終結算價在最後交易日的<b>次一營業日</b>開盤後 15 分鐘內決定，所以本站的 T 算到結算日、不是最後交易日。'
+  },
+  SPX: {
+    what: '<b>CBOE</b> 的 S&P 500 <b>指數</b>選擇權（SPX / SPXW），<b>現金結算</b>、歐式，每口 = 指數 × $100。',
+    more: '這是全美最大的一本 S&P gamma 帳。<b>如果你交易的是 CME 的 ES 日選，請看 ES 分頁</b>——那是另一個交易所、另一本帳，'
+        + '同一個指數但部位分佈不一樣。另外本站把 <b>SPX（AM 結算月選）</b>與 <b>SPXW（PM 結算週選 / 日選）</b>拆成獨立的到期別。',
+    size: '2026/08/21 未平倉名目約 $17.4 兆 — 約為 SPY 的 12 倍、CME ES 的 10 倍'
+  },
+  ES: {
+    what: '<b>CME</b> 的 E-mini S&P 500 <b>期貨</b>選擇權，被指派後<b>會變成一口 ES 期貨部位</b>（不是現金結算），每口 = 指數 × $50。',
+    more: 'Globex 幾乎 24 小時交易，台灣白天也能調部位。<b>想看整體 S&P 的 gamma 地形請切 SPX 分頁</b>，那本帳大得多；'
+        + '但你實際成交、實際被避險的是這一本。每口只有 SPX 的一半大，部位顆粒度比較細。',
+    size: '2026/08/21 未平倉名目約 $1.76 兆（SPX 的 1/10）；但「每日到期」那一段當日成交 79.8 萬口，與 SPXW 的 98.5 萬口同一量級'
+  },
+  SPY: {
+    what: '<b>SPY ETF</b> 選擇權，美式，到期<b>交割 100 股 SPY</b>，每口 = 價格 × $100。',
+    more: 'S&P 的 gamma 主體不在這裡，在 <b>SPX</b>（切上一個分頁）。SPY 適合看散戶與 ETF 端的部位，量級只有 SPX 的十二分之一。',
+    size: '2026/08/21 未平倉名目約 $1.40 兆'
+  },
+  QQQ: {
+    what: '<b>QQQ ETF</b> 選擇權，美式，到期<b>交割 100 股 QQQ</b>，每口 = 價格 × $100。',
+    more: '跟 S&P 相反，<b>那斯達克的 gamma 主體就在這裡</b>：QQQ 比 NDX（約 $0.47 兆）和 CME 的 NQ 選擇權（約 $0.12 兆）都大，'
+        + '所以本站沒有另外做 NQ 分頁——加了也幾乎不會改變畫面。',
+    size: '2026/08/21 未平倉名目約 $0.91 兆'
+  },
+};
+
+function renderSymNote(sym) {
+  const n = SYM_NOTES[sym], box = $('#symNote');
+  if (!n) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  box.innerHTML = n.what + (n.more ? '　' + n.more : '')
+    + (n.size ? `<span class="sz">${n.size}</span>` : '');
+}
+
 function applyMeta() {
   const m = S.data.meta;
   E = m.unit_div || 1e8;
@@ -111,6 +154,7 @@ function applyMeta() {
       `報價為 <b>${m.price_as_of}</b> 收盤。本頁以未平倉日標示，隱含波動率則來自較新的那組報價。` +
       `（OCC 每個營業日早上才發布前一日的未平倉量，排程若在發布前跑就會出現這個情況。）`;
   } else { warn.style.display = 'none'; }
+  renderSymNote(m.symbol);
   $('#nGex').textContent = UNIT + ' / 標的移動 1%';
   $('#nVex').textContent = 'vanna 曝險・' + UNIT + ' / 波動率 1 點';
   document.title = `${m.label} 選擇權曝險地圖`;
