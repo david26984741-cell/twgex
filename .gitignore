@@ -1,4 +1,5 @@
-raw/
+raw/*
+!raw/cme_ES.json
 *.pyc
 __pycache__/
 曝險地圖_*.html

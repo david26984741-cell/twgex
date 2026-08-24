@@ -43,9 +43,10 @@ SPECS = {
         "strike_band": 0.50,
         "default_view_band": 0.20,
         "venue": "CME",
-        "source": "CME 公開結算表（Settlements / Options）",
+        "source": "CME 公開結算表 + 成交量表（未平倉取當日收盤）",
         "price_note": "結算價",
         "tz_note": "美東時間收盤後更新",
+        "spot_note": "主力月期貨結算價",
     },
     "SPY": {
         "label": "SPY", "desc": "SPDR S&P 500 ETF",

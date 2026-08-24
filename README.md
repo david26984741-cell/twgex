@@ -76,15 +76,23 @@ gh repo create twopt-gexmap --private --source=. --push
 |---|---|---|
 | 週一～五 15:15 | TXO | 一般交易時段 13:45 收盤，期交所盤後檔約 15:00 上架 |
 | 週一～五 21:20 | SPX / SPY / QQQ | 美東夏令 09:20 / 冬令 08:20，抓的是**前一個**美股收盤 |
+| 週一～五 21:20 | ES | 不在 Actions 裡，另外由排程任務驅動瀏覽器抓（見下） |
 
-**ES（CME 小型 S&P 期貨選擇權）不在排程裡。** CME 的邊緣節點擋掉 GitHub Actions 的 IP——
+**ES（CME 小型 S&P 期貨選擇權）不走 GitHub Actions。** CME 的邊緣節點擋掉 Actions 的 IP——
 純 Python 請求回 403、無頭 Chromium 走 HTTP/2 連線被重置、改走 HTTP/1.1 則 90 秒逾時（連試三次）。
-程式碼（`cme.py` / `cme_fetch.py`）與單元測試都留著，在一般網路環境下可以直接跑：
+從一般家用 / 辦公網路的瀏覽器打同樣的 API 則完全正常。所以 ES 改成
+**每個交易日晚上由排程任務去驅動一台開著的 Chrome 抓**，抓完直接更新 repo。
+
+在一般網路環境的機器上要手動補跑，兩行就好：
 
 ```
-python cme_fetch.py --out raw/cme_ES.json
+python cme_fetch.py --out raw/cme_ES.json     # 需要 playwright
 python build.py --symbol ES --json raw/cme_ES.json
 ```
+
+未平倉一定要用 `cme_fetch.py`（或同一套邏輯）抓：CME 結算表給的 openInterest 是
+**前一個交易日**的，當日的在 `Volume/Options/Details` 的 `atClose`。
+日選差到 45%，細節寫在 `METHODOLOGY.md`。`build.py` 如果收到前一日的未平倉會在 stderr 警告。
 
 
 沒有保險班。期交所當天延遲上架的話，到 Actions 頁面按 **Run workflow** 補跑即可

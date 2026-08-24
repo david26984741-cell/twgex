@@ -231,7 +231,11 @@ def load_cme(args, sym):
                 prev_oi[("*", r["K"], "P")] = r["op"]
     extra = {"n_contracts_all": meta.get("n_contracts_all"),
              "n_requests": meta.get("n_requests"),
+             "oi_asof": meta.get("oi_asof"), "oi_report": meta.get("oi_report"),
              "futures": (meta.get("futures") or [])[:6]}
+    if meta.get("oi_asof") == "prev":
+        print(f"  警告：這批未平倉是「前一個交易日」的（成交量表沒併進來），"
+              f"日選會嚴重低估。", file=sys.stderr)
     return day, chain, prev_oi, args.spot or meta.get("spot"), prior, extra
 
 
@@ -274,7 +278,7 @@ def main() -> int:
         print(f"{sym}: 所有到期別都反解不出遠期價", file=sys.stderr)
         return 1
     if spot and spot > 0:
-        S_ref, ref_src = float(spot), "現貨收盤"
+        S_ref, ref_src = float(spot), spec.get("spot_note") or "現貨收盤"
     else:
         S_ref, e = pick_reference_forward(live, diag, forwards)
         ref_src = f"{e} 遠期（抓不到現貨）"

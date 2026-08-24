@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""用無頭 Chromium 代抓 CME 的選擇權結算表。
+"""用瀏覽器代抓 CME 的選擇權結算表 ＋ 當日未平倉。
 
 為什麼要這樣做：CME 的網站 API（/CmeWS/...）擋掉非瀏覽器的請求，直接回 HTTP 403
-（Akamai 的機器人防護會看 TLS 指紋，光換 User-Agent 沒用）。所以先用 Chromium
+（Akamai 的機器人防護會看 TLS 指紋，光換 User-Agent 沒用）。所以先用瀏覽器
 真的把 CME 的頁面載入一次、拿到 Akamai 的 cookie，再從頁面內部（同源）去呼叫 API。
+
+**未平倉要用兩支 API 併起來**：結算表（Settlements/OOF）給的 openInterest 是
+「前一個交易日」的，不是當天的。當天的在成交量表（Volume/Options/Details）的
+atClose 欄位。逐檔驗證過：結算表OI + change = atClose，一口不差。
+對日選（1 天到期）差很大——例如 2026/08/21 的 E4AQ26，結算表給 105,650，
+實際當日收盤是 192,119，少算 45%。
 
 輸出的 JSON 直接餵給 build.py：
     python cme_fetch.py --date 20260821 --out raw/cme_ES.json
     python build.py --symbol ES --json raw/cme_ES.json
 
-格式與 cme.chain_from_dump 對應：
-    {"tradeDate": "MM/DD/YYYY",
-     "futures": [[month, settle, openInterest], ...],
-     "series": [{"code","name","type","lastTrade","pid","rows":[[strike,type,settle,oi,vol],...]}]}
+rows 每一列是 [strike, type, settle, oi, vol, oi_prev]，oi 已經是當日的。
 """
 from __future__ import annotations
 
@@ -26,25 +29,30 @@ import sys
 SEED_URL = "https://www.cmegroup.com/markets/equities/sp/e-mini-sandp500.settlements.options.html"
 FUT_PRODUCT = {"ES": 133}
 
-# 在頁面內執行：列出所有系列，逐系列要結算表。
+# 在頁面內執行：列出所有系列 → 逐系列要結算表（價格）＋ 成交量表（當日未平倉）。
 # productId 與系列代碼的配對：代碼裡的數字就是第幾週（E4A → productIds[3]），
 # 先照這個猜，猜不中才退回逐一試，可以把請求數壓到接近 1 次/系列。
+# 成交量表用「結算表猜中的那個 pid」，不必再猜一次。
 JS = r"""
-async ({futProduct, tradeDate, maxDays, pause}) => {
+async ({futProduct, tradeDate, tradeDateC, maxDays, pause}) => {
   const j = async (u) => {
     const r = await fetch(u, {headers: {Accept: 'application/json'}});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const cal = await j('/CmeWS/mvc/ProductCalendar/Options/' + futProduct);
+  const N = x => {
+    const s = String(x == null ? '' : x).replace(/,/g, '').trim();
+    if (!s || s === '-') return 0;
+    const v = parseInt(s, 10);
+    return isNaN(v) ? 0 : v;
+  };
+  const K = x => parseFloat(String(x).replace(/,/g, ''));
 
+  const cal = await j('/CmeWS/mvc/ProductCalendar/Options/' + futProduct);
   const [mm, dd, yy] = tradeDate.split('/');
   const td0 = new Date(Date.UTC(+yy, +mm - 1, +dd));
-  const parseLT = s => {
-    const d = new Date(s + ' UTC');
-    return isNaN(d) ? null : d;
-  };
+  const parseLT = s => { const d = new Date(s + ' UTC'); return isNaN(d) ? null : d; };
 
   const series = [];
   for (const ty of cal) {
@@ -59,13 +67,46 @@ async ({futProduct, tradeDate, maxDays, pause}) => {
       if (wk >= 1 && wk <= pids.length) order.push(pids[wk - 1]);
       for (const p of pids) if (!order.includes(p)) order.push(p);
       series.push({code: e.productCode, name: ty.name, type: ty.optionType,
-                   lastTrade: e.lastTrade, order});
+                   lastTrade: e.lastTrade, month: e.contractMonth || '', order});
     }
   }
 
+  // 成交量表：回傳 Map("C|5400" -> {atClose, change})，月份對不上就回 null
+  const volOI = async (pid, code, rt, wantMonth) => {
+    let v;
+    try {
+      v = await j('/CmeWS/mvc/Volume/Options/Details?productid=' + pid +
+        '&tradedate=' + tradeDateC + '&expirationcode=' + encodeURIComponent(code) +
+        '&reporttype=' + rt);
+    } catch (err) { return null; }
+    const md = v.monthData || [];
+    if (!md.length) return null;
+    // 月份守門：成交量表是用 (pid, 月份) 定位的，對不上就不要合併
+    if (wantMonth) {
+      const want = wantMonth.replace(/\s+/g, ' ').trim().toUpperCase();
+      const got = String(md[0].month || '').replace(/\s+/g, ' ').trim().toUpperCase();
+      if (got && want && got !== want) return null;
+    }
+    const map = new Map();
+    let tot = 0;
+    for (const m of md) {
+      const cp = /Calls/i.test(m.monthID || '') ? 'C' : 'P';
+      for (const r of m.strikeData || []) {
+        const oi = N(r.atClose);
+        map.set(cp + '|' + K(r.strike), [oi, N(r.change)]);
+        tot += oi;
+      }
+    }
+    return {map, tot};
+  };
+
+  // 先用第一個抓得到的系列決定報表版本：F（最終）優先，沒有就用 P（初步）
+  let RT = null;
   const out = [];
-  let reqs = 0;
+  let reqs = 0, merged = 0, fellBack = 0, oiPrevTot = 0, oiTot = 0, chgTot = 0;
+
   for (const s of series) {
+    let rows = null, usedPid = null;
     for (const pid of s.order) {
       reqs++;
       let data = null;
@@ -74,16 +115,39 @@ async ({futProduct, tradeDate, maxDays, pause}) => {
           '/OOF?monthYear=' + encodeURIComponent(s.code) +
           '&tradeDate=' + encodeURIComponent(tradeDate) + '&strategy=DEFAULT');
       } catch (err) { await sleep(pause); continue; }
-      const rows = (data.settlements || [])
-        .filter(x => x.strike && String(x.strike).toLowerCase() !== 'total')
-        .map(x => [x.strike, x.type, x.settle, x.openInterest, x.volume]);
-      if (rows.length) {
-        out.push({code: s.code, name: s.name, type: s.type,
-                  lastTrade: s.lastTrade, pid, rows});
-        break;
-      }
+      const r = (data.settlements || [])
+        .filter(x => x.strike && String(x.strike).toLowerCase() !== 'total');
+      if (r.length) { rows = r; usedPid = pid; break; }
       await sleep(pause);
     }
+    if (!rows) { await sleep(pause); continue; }
+
+    // 當日未平倉
+    let vo = null;
+    const tryTypes = RT ? [RT, RT === 'F' ? 'P' : 'F'] : ['F', 'P'];
+    for (const rt of tryTypes) {
+      reqs++;
+      vo = await volOI(usedPid, s.code, rt, s.month);
+      if (vo) { if (!RT) RT = rt; vo.rt = rt; break; }
+      await sleep(pause);
+    }
+    if (vo) merged++; else fellBack++;
+
+    const outRows = [];
+    for (const x of rows) {
+      const cp = String(x.type || '').toUpperCase().startsWith('C') ? 'C' : 'P';
+      const oiPrev = N(x.openInterest);
+      let oi = oiPrev, chg = 0;
+      if (vo) {
+        const hit = vo.map.get(cp + '|' + K(x.strike));
+        if (hit) { oi = hit[0]; chg = hit[1]; }
+        else { oi = oiPrev; }        // 成交量表沒列出的檔位＝未平倉 0，維持結算表的值
+      }
+      oiPrevTot += oiPrev; oiTot += oi; chgTot += chg;
+      outRows.push([x.strike, x.type, x.settle, oi, x.volume, oiPrev]);
+    }
+    out.push({code: s.code, name: s.name, type: s.type, lastTrade: s.lastTrade,
+              pid: usedPid, oiSrc: vo ? vo.rt : 'settle', rows: outRows});
     await sleep(pause);
   }
 
@@ -96,8 +160,10 @@ async ({futProduct, tradeDate, maxDays, pause}) => {
       .map(x => [x.month, x.settle, x.openInterest]);
   } catch (err) {}
 
-  return {tradeDate, futures, series: out,
-          stats: {candidates: series.length, fetched: out.length, requests: reqs}};
+  return {tradeDate, futures, series: out, oiAsOf: 'close', oiReport: RT,
+          stats: {candidates: series.length, fetched: out.length, requests: reqs,
+                  oiMerged: merged, oiFellBack: fellBack,
+                  oiPrevTot, oiTot, chgTot, recon: oiPrevTot + chgTot - oiTot}};
 }
 """
 
@@ -116,6 +182,19 @@ def us_prev_session(today: dt.date) -> dt.date:
         return d
 
 
+def summarize(data: dict, out_path: str = "") -> str:
+    """把抓回來的東西整理成一行給人看的摘要。"""
+    st = data.get("stats", {}) or {}
+    oi = st.get("oiTot", 0)
+    rt = {"F": "最終", "P": "初步"}.get(data.get("oiReport"), data.get("oiReport") or "—")
+    recon = st.get("recon")
+    ok = "對帳吻合" if recon == 0 else f"對帳差 {recon:+,}"
+    tail = f"  -> {out_path} ({os.path.getsize(out_path)/1024:.0f} KB)" if out_path else ""
+    return (f"{data.get('tradeDate')}  系列 {st.get('fetched')}/{st.get('candidates')}  "
+            f"請求 {st.get('requests')} 次  未平倉合計 {oi:,}（當日收盤・{rt}報表）  "
+            f"合併 {st.get('oiMerged')} 退回 {st.get('oiFellBack')}  {ok}{tail}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="ES")
@@ -124,7 +203,7 @@ def main() -> int:
     ap.add_argument("--max-days", type=int, default=400,
                     help="只抓這麼多天內到期的系列（更遠期的未平倉極小）")
     ap.add_argument("--pause", type=int, default=120, help="每次請求之間的毫秒數")
-    ap.add_argument("--timeout", type=int, default=600, help="頁內腳本的秒數上限")
+    ap.add_argument("--timeout", type=int, default=900, help="頁內腳本的秒數上限")
     ap.add_argument("--base", help="測試用：改打別的站台（預設 cmegroup.com）")
     a = ap.parse_args()
 
@@ -152,6 +231,7 @@ def main() -> int:
                              extra_http_headers={"Accept-Language": "en-US,en;q=0.9"})
         ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         page = ctx.new_page()
+        page.set_default_timeout(a.timeout * 1000)
         print("載入 CME 頁面取得 cookie …", file=sys.stderr)
         last = None
         for attempt in range(3):
@@ -166,23 +246,21 @@ def main() -> int:
         if last is not None:
             raise last
         page.wait_for_timeout(6000)                      # 等 Akamai 的 script 跑完
-        print(f"開始抓 {a.symbol} {td} 的結算表 …", file=sys.stderr)
+        print(f"開始抓 {a.symbol} {td} 的結算表＋當日未平倉 …", file=sys.stderr)
         data = page.evaluate(JS, {"futProduct": FUT_PRODUCT[a.symbol], "tradeDate": td,
-                                  "maxDays": a.max_days, "pause": a.pause})
+                                  "tradeDateC": day, "maxDays": a.max_days,
+                                  "pause": a.pause})
         br.close()
 
-    st = data.pop("stats", {})
     if not data.get("series"):
-        print(f"{a.symbol}: 一個系列都沒抓到（{st}）", file=sys.stderr)
+        print(f"{a.symbol}: 一個系列都沒抓到（{data.get('stats')}）", file=sys.stderr)
         return 1
-    oi = sum(int(str(r[3]).replace(",", "") or 0)
-             for s in data["series"] for r in s["rows"])
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+    st = data.pop("stats", {})
     with open(a.out, "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
-    print(f"{a.symbol} {td}  候選系列 {st.get('candidates')}  抓到 {st.get('fetched')}  "
-          f"請求 {st.get('requests')} 次  未平倉合計 {oi:,}  -> {a.out} "
-          f"({os.path.getsize(a.out)/1024:.0f} KB)", file=sys.stderr)
+    data["stats"] = st
+    print(a.symbol + "  " + summarize(data, a.out), file=sys.stderr)
     return 0
 
 

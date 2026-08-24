@@ -10,9 +10,15 @@
   行事曆  /CmeWS/mvc/ProductCalendar/Options/{期貨productId}
   結算表  /CmeWS/mvc/Settlements/Options/Settlements/{選擇權productId}/OOF
           ?monthYear={系列代碼}&tradeDate=MM/DD/YYYY&strategy=DEFAULT
+  成交量  /CmeWS/mvc/Volume/Options/Details
+          ?productid={選擇權productId}&tradedate=YYYYMMDD&expirationcode={系列代碼}
+          &reporttype=F（最終）或 P（初步）
   期貨    /CmeWS/mvc/Settlements/Futures/Settlements/{期貨productId}/FUT?tradeDate=...
 
-結算表一次就給 strike / type / settle / openInterest / volume，不必再另外要未平倉。
+**結算表的 openInterest 是前一個交易日的，不是當天的。** 當天的未平倉在成交量表的
+atClose 欄位。逐檔驗證過：結算表OI + change = atClose，一口不差。價格只有結算表有，
+未平倉只有成交量表是當天的，所以兩支都要打、再依 (買賣權, 履約價) 併起來。
+日選差最多——2026/08/21 的 E4AQ26 結算表給 105,650，當日收盤實際是 192,119。
 
 **同一天可能有兩個不同系列到期**：例如每月第三個星期五，月選（ES，美式）與
 第三週的週五週選（EW3，歐式）會落在同一天。所以 chain 用「系列代碼」當 key，
@@ -86,6 +92,7 @@ def list_series(sym: str = "ES") -> List[dict]:
         for e in ty.get("calendarEntries", []):
             out.append({"code": e["productCode"], "last_trade": e["lastTrade"],
                         "option_type": ty.get("optionType"), "name": ty.get("name"),
+                        "month": e.get("contractMonth", ""),
                         "american": ty.get("optionType") == "AME", "pids": list(pids)})
     return out
 
@@ -129,11 +136,14 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
     chain: Dict[str, dict] = {}
     n_all = n_used = 0
     tried = 0
+    n_merged = n_fellback = 0
+    rt_lock = ""
     for s in list_series(sym):
         ltd = _parse_last_trade(s["last_trade"])
         if ltd is None or ltd.strftime("%Y%m%d") <= trade_day:
             continue                                  # 已到期 / 當日到期一律排除
         rows = []
+        used_pid = None
         for pid in s["pids"]:                         # 系列碼與 productId 的配對不固定，逐一試
             tried += 1
             try:
@@ -144,11 +154,19 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
             r = [x for x in (j.get("settlements") or [])
                  if x.get("strike") and str(x["strike"]).lower() != "total"]
             if r:
-                rows = r
+                rows, used_pid = r, pid
                 break
             time.sleep(pause)
         if not rows:
             continue
+        vo = fetch_volume_oi(used_pid, s["code"], trade_day, s.get("month", ""), rt_lock)
+        tried += 1
+        if vo:
+            vmap, rt_lock = vo[0], vo[1]
+            n_merged += 1
+        else:
+            vmap = None
+            n_fellback += 1
         blk = chain.setdefault(s["code"], {
             "ltd": _prev(ltd) if s["american"] else ltd,
             "kind": kind_of(s["name"], s["american"]),
@@ -156,6 +174,10 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
         for x in rows:
             n_all += 1
             oi = _int(x.get("openInterest"))
+            K0 = _num(x.get("strike"))
+            cp0 = "C" if str(x.get("type", "")).upper().startswith("C") else "P"
+            if vmap is not None and K0 is not None:
+                oi = vmap.get((cp0, K0), (oi, 0))[0]   # 併入當日收盤未平倉
             if oi <= 0:
                 continue
             px = _num(x.get("settle"))
@@ -175,8 +197,44 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
     fut = fetch_futures(trade_day, sym)
     meta = {"symbol": sym, "trade_day": trade_day, "futures": fut,
             "n_contracts_all": n_all, "n_contracts_used": n_used,
-            "n_requests": tried, "spot": front_settle(fut)}
+            "n_requests": tried, "spot": front_settle(fut),
+            "oi_asof": "close" if n_merged else "prev",
+            "oi_report": rt_lock, "oi_merged": n_merged, "oi_fellback": n_fellback}
     return chain, meta
+
+
+def fetch_volume_oi(pid: int, code: str, trade_day: str, want_month: str = "",
+                    report: str = "") -> Optional[Tuple[Dict[Tuple[str, float], Tuple[int, int]], str]]:
+    """當日未平倉。回傳 ({(買賣權, 履約價): (atClose, change)}, 用到的報表版本)。
+
+    report 空字串＝先試 F（最終）再試 P（初步）。月份對不上就回 None——成交量表是用
+    (productId, 月份) 定位的，同一個 pid 餵不同系列碼會回到同一個月份，不擋會併錯。
+    """
+    for rt in ([report] if report else ["F", "P"]):
+        try:
+            j = _get("/CmeWS/mvc/Volume/Options/Details",
+                     {"productid": pid, "tradedate": trade_day,
+                      "expirationcode": code, "reporttype": rt})
+        except RuntimeError:
+            continue
+        md = j.get("monthData") or []
+        if not md:
+            continue
+        if want_month:
+            got = " ".join(str(md[0].get("month", "")).split()).upper()
+            if got and got != " ".join(want_month.split()).upper():
+                return None
+        out: Dict[Tuple[str, float], Tuple[int, int]] = {}
+        for m in md:
+            cp = "C" if "call" in str(m.get("monthID", "")).lower() else "P"
+            for r in m.get("strikeData") or []:
+                K = _num(r.get("strike"))
+                if K is None:
+                    continue
+                out[(cp, K)] = (_int(r.get("atClose")), _int(r.get("change")))
+        if out:
+            return out, rt
+    return None
 
 
 def fetch_futures(trade_day: str, sym: str = "ES") -> List[dict]:
@@ -222,9 +280,14 @@ def read_json_file(path: str) -> dict:
 def chain_from_dump(dump: dict, prev_td=None) -> Tuple[Dict[str, dict], dict]:
     """把離線抓好的原始結算表（瀏覽器端收集的）轉成 chain。
 
-    dump = {"tradeDate": "MM/DD/YYYY", "futures": [[month, settle, oi], ...],
-            "series": [{"code","name","type","lastTrade","pid",
-                        "rows": [[strike, type, settle, openInterest, volume], ...]}]}
+    dump = {"tradeDate": "MM/DD/YYYY", "oiAsOf": "close", "oiReport": "F"|"P",
+            "futures": [[month, settle, oi], ...],
+            "series": [{"code","name","type","lastTrade","pid","oiSrc",
+                        "rows": [[strike, type, settle, oi, volume, oi_prev], ...]}]}
+
+    rows 第 4 欄的 oi 已經是「當日收盤」的未平倉（抓的時候就從成交量表併好了）；
+    第 6 欄 oi_prev 是結算表原本給的前一日值，只留著對帳用。舊格式（5 欄）也吃得下，
+    那時 oi 就是前一日的，meta 的 oi_asof 會標成 prev。
     """
     def _prev(d):
         if prev_td:
@@ -239,7 +302,10 @@ def chain_from_dump(dump: dict, prev_td=None) -> Tuple[Dict[str, dict], dict]:
     trade_day = f"{y}{m}{d0}" if y else ""
     chain: Dict[str, dict] = {}
     n_all = n_used = 0
+    oi_tot = oi_prev_tot = 0
+    src = {}
     for s in dump.get("series", []):
+        src[s.get("oiSrc", "settle")] = src.get(s.get("oiSrc", "settle"), 0) + 1
         ltd = _parse_last_trade(s.get("lastTrade", ""))
         if ltd is None or (trade_day and ltd.strftime("%Y%m%d") <= trade_day):
             continue
@@ -250,8 +316,11 @@ def chain_from_dump(dump: dict, prev_td=None) -> Tuple[Dict[str, dict], dict]:
             "american": american, "settle_date": ltd, "strikes": {}})
         for r in s.get("rows", []):
             n_all += 1
-            K, typ, settle, oi, vol = (list(r) + [None] * 5)[:5]
+            row = list(r) + [None] * 6
+            K, typ, settle, oi, vol, oi_prev = row[:6]
             oi = _int(oi)
+            oi_prev_tot += _int(oi_prev) if oi_prev is not None else oi
+            oi_tot += oi
             if oi <= 0:
                 continue
             px = _num(settle)
@@ -265,6 +334,11 @@ def chain_from_dump(dump: dict, prev_td=None) -> Tuple[Dict[str, dict], dict]:
     chain = {k: v for k, v in chain.items() if v["strikes"]}
     fut = [{"month": f[0], "settle": _num(f[1]), "oi": _int(f[2])}
            for f in (dump.get("futures") or [])]
+    merged = sum(n for k, n in src.items() if k in ("F", "P"))
     return chain, {"symbol": "ES", "trade_day": trade_day, "futures": fut,
                    "n_contracts_all": n_all, "n_contracts_used": n_used,
-                   "spot": front_settle(fut)}
+                   "spot": front_settle(fut),
+                   "oi_asof": dump.get("oiAsOf") or ("close" if merged else "prev"),
+                   "oi_report": dump.get("oiReport") or "",
+                   "oi_merged": merged, "oi_fellback": src.get("settle", 0),
+                   "oi_total": oi_tot, "oi_prev_total": oi_prev_tot}

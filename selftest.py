@@ -219,6 +219,47 @@ def cme_tests():
     tot = sum(r["oi"] for b in chain.values() for st in b["strikes"].values() for r in st.values())
     check("履約價不互相覆蓋、已到期系列被排除", tot == 1111 + 2222 + 3333 + 4444, f"未平倉 {tot}")
     check("參考價取未平倉最大的期貨結算價", meta["spot"] == 7691.25, str(meta["spot"]))
+    check("舊格式（5 欄）仍讀得動，未平倉標成前一日", meta["oi_asof"] == "prev", meta["oi_asof"])
+
+    # --- 當日未平倉：6 欄格式 ---
+    dump2 = {"tradeDate": "08/21/2026", "oiAsOf": "close", "oiReport": "P",
+             "futures": [["SEP 26", "7691.25", "2,019,214"]],
+             "series": [
+                 {"code": "E4AQ26", "name": "E-mini S&P 500 Monday Weekly Options",
+                  "type": "MW1", "lastTrade": "24 Aug 2026", "oiSrc": "P",
+                  "rows": [["7600.00", "Call", "20.00", "1,500", "10", "1,000"],
+                           ["7600.00", "Put", "18.00", "2,500", "5", "2,000"],
+                           # 成交量表沒列到、結算表未平倉 0 的檔位要被丟掉
+                           ["1000.00", "Put", "0.05", "0", "0", "0"]]}]}
+    c2, m2 = cme.chain_from_dump(dump2, prev_td=prev)
+    tot2 = sum(r["oi"] for b in c2.values() for st in b["strikes"].values() for r in st.values())
+    check("6 欄格式取當日未平倉", tot2 == 4000, f"未平倉 {tot2}（前一日是 3000）")
+    check("未平倉標記為當日收盤",
+          m2["oi_asof"] == "close" and m2["oi_report"] == "P" and m2["oi_merged"] == 1,
+          f"{m2['oi_asof']} / {m2['oi_report']} / 合併 {m2['oi_merged']}")
+    check("前一日未平倉合計仍留著可對帳",
+          m2["oi_total"] == 4000 and m2["oi_prev_total"] == 3000,
+          f"當日 {m2['oi_total']} / 前一日 {m2['oi_prev_total']}")
+    check("未平倉 0 的檔位不進圖", 7600.0 in c2["E4AQ26"]["strikes"] and 1000.0 not in c2["E4AQ26"]["strikes"],
+          str(sorted(c2["E4AQ26"]["strikes"])))
+
+    # --- 成交量表的月份守門 ---
+    class FakeGet:
+        def __init__(self, month): self.month = month
+        def __call__(self, path, params=None, **kw):
+            return {"monthData": [{"month": self.month, "monthID": "AUG-2026-Calls",
+                                   "strikeData": [{"strike": "7600", "atClose": "5", "change": "1"}]}]}
+    real = cme._get
+    try:
+        cme._get = FakeGet("AUG 2026")
+        ok1 = cme.fetch_volume_oi(5222, "EW4Q26", "20260821", "Aug 2026")
+        cme._get = FakeGet("SEP 2026")
+        ok2 = cme.fetch_volume_oi(5222, "EW4Q26", "20260821", "Aug 2026")
+    finally:
+        cme._get = real
+    check("成交量表月份對得上才合併",
+          ok1 is not None and ok1[0][("C", 7600.0)] == (5, 1) and ok2 is None,
+          "月份不符時回 None，避免併到別的系列")
 
 
 def main():
