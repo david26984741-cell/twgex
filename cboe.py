@@ -81,7 +81,7 @@ def _mid(bid, ask, last) -> Optional[float]:
     return None
 
 
-def oi_as_of(payload: dict, today: str) -> Optional[str]:
+def oi_as_of(payload: dict, today: str, prev_td=None) -> Optional[str]:
     """從資料本身推斷「這批未平倉量是哪一天收盤的」。
 
     做法: 找出已經到期、但序列上還掛著未平倉的最晚到期日 E。
@@ -104,14 +104,18 @@ def oi_as_of(payload: dict, today: str) -> Optional[str]:
         return None
     latest = max(expired)
     y, m, dd = int(latest[:4]), int(latest[4:6]), int(latest[6:8])
-    d0 = dt.date(y, m, dd) - dt.timedelta(days=1)
+    e = dt.date(y, m, dd)
+    if prev_td:
+        return prev_td(e).strftime("%Y%m%d")
+    d0 = e - dt.timedelta(days=1)
     while d0.weekday() >= 5:
         d0 -= dt.timedelta(days=1)
     return d0.strftime("%Y%m%d")
 
 
 def parse_chain(payload: dict, trade_day: Optional[str] = None,
-                am_roots: tuple = (), prev_td=None) -> Tuple[Dict[str, dict], dict]:
+                am_roots: tuple = (), prev_td=None,
+                use_prev_close: bool = False) -> Tuple[Dict[str, dict], dict]:
     """回傳 (chain, meta)。chain 的結構跟 taifex.parse_options 的單日區塊一致，
     可以直接餵給 engine.build_legs。
 
@@ -122,6 +126,18 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
       1. 用 <到期日>A 當 key，跟同一天的 PM 序列分開，避免履約價互相覆蓋
       2. 最後交易日往前挪一個交易日（結算價是隔天開盤決定的）
     prev_td: 取前一個交易日的函式，沒給就退回「前一天、跳過週末」。
+
+    use_prev_close: 用每一檔的 `prev_day_close`（前一交易日收盤價）而不是「現在的買賣中價」，
+      標的價也改用 `data.prev_day_close`。
+
+      **為什麼需要這個模式。** CBOE 這份檔案裡，價格是即時的、未平倉量卻是 OCC 隔天早上才更新的，
+      兩者永遠差一個交易日：開盤前抓 → 價格對（前一日收盤）但未平倉舊一天；
+      等未平倉更新（美東 10:00~10:30）→ 未平倉對了但價格已經變成當日盤中。
+      **沒有任何一個時點兩者同時正確。** 改用 prev_day_close 之後，
+      在「未平倉更新後、當日收盤前」這段長達五小時的窗口裡抓一次，
+      價格與未平倉就都是同一個交易日的收盤，而且完全不怕排程延遲。
+      實測 SPY 2026/08/26：9,913 檔有未平倉的合約全部都有 prev_day_close，一檔不漏；
+      用它反解的 parity 遠期與標的前一日收盤只差 0.03~0.06%。
     """
     def _prev(d):
         if prev_td:
@@ -131,12 +147,15 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
             x -= dt.timedelta(days=1)
         return x
     d = payload.get("data") or {}
-    # 盤前抓取時 current_price 可能是盤前指示價，官方收盤價才是我們要的
-    spot = d.get("close") or d.get("current_price") or d.get("prev_day_close")
+    if use_prev_close:
+        spot = d.get("prev_day_close")
+    else:
+        # 盤前抓取時 current_price 可能是盤前指示價，官方收盤價才是我們要的
+        spot = d.get("close") or d.get("current_price") or d.get("prev_day_close")
     day = trade_day or (d.get("last_trade_time") or "")[:10].replace("-", "")
 
     chain: Dict[str, dict] = {}
-    n_all = n_used = 0
+    n_all = n_used = n_noprice = 0
     for o in d.get("options") or []:
         code = o.get("option") or ""
         if len(code) < 16:
@@ -146,8 +165,13 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
         n_all += 1
         if oi <= 0:
             continue
-        px = _mid(o.get("bid"), o.get("ask"), o.get("last_trade_price"))
+        if use_prev_close:
+            px = o.get("prev_day_close")
+            px = float(px) if px not in (None, "") else None
+        else:
+            px = _mid(o.get("bid"), o.get("ask"), o.get("last_trade_price"))
         if px is None or px <= 0:
+            n_noprice += 1
             continue
         y, m, dd = int(exp[:4]), int(exp[4:6]), int(exp[6:8])
         exp_date = dt.date(y, m, dd)
@@ -162,10 +186,14 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
             "oi": oi, "vol": int(o.get("volume") or 0)}
         n_used += 1
 
+    session_day = (d.get("last_trade_time") or "")[:10].replace("-", "")
     meta = {"symbol": d.get("symbol"), "spot": spot, "trade_day": day,
-            "price_day": (d.get("last_trade_time") or "")[:10].replace("-", ""),
+            "session_day": session_day,
+            "price_day": session_day,          # use_prev_close 時由呼叫端改成前一個交易日
+            "price_basis": "prev_close" if use_prev_close else "mid",
             "quote_time": d.get("last_trade_time"), "snapshot": payload.get("timestamp"),
-            "iv30": d.get("iv30"), "n_contracts_all": n_all, "n_contracts_used": n_used}
+            "iv30": d.get("iv30"), "n_contracts_all": n_all, "n_contracts_used": n_used,
+            "n_no_price": n_noprice}
     return chain, meta
 
 

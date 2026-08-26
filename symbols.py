@@ -29,8 +29,8 @@ SPECS = {
         "default_view_band": 0.20,
         "cboe_symbol": "_SPX",              # CDN 端點的指數代號要加底線
         "am_roots": ("SPX",),               # SPX 根碼 = AM 結算；SPXW = PM 結算
-        "source": "CBOE 公開延遲報價（買賣中價）",
-        "price_note": "買賣中價",
+        "source": "CBOE 公開資料（前一交易日收盤價 ＋ 同日收盤未平倉量）",
+        "price_note": "收盤價",
         "tz_note": "美東時間收盤後更新；未平倉量由 OCC 隔日發布",
     },
     "ES": {
@@ -58,8 +58,8 @@ SPECS = {
         "parity_band": 0.05,
         "strike_band": 0.50,
         "default_view_band": 0.20,
-        "source": "CBOE 公開延遲報價（買賣中價）",
-        "price_note": "買賣中價",
+        "source": "CBOE 公開資料（前一交易日收盤價 ＋ 同日收盤未平倉量）",
+        "price_note": "收盤價",
         "tz_note": "美東時間收盤後更新；未平倉量由 OCC 隔日發布",
     },
     "QQQ": {
@@ -71,8 +71,8 @@ SPECS = {
         "parity_band": 0.05,
         "strike_band": 0.50,
         "default_view_band": 0.20,
-        "source": "CBOE 公開延遲報價（買賣中價）",
-        "price_note": "買賣中價",
+        "source": "CBOE 公開資料（前一交易日收盤價 ＋ 同日收盤未平倉量）",
+        "price_note": "收盤價",
         "tz_note": "美東時間收盤後更新；未平倉量由 OCC 隔日發布",
     },
 }

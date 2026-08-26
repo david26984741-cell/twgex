@@ -184,6 +184,45 @@ def chain_tests():
     check("同一到期日的 AM / PM 履約價不互相覆蓋", tot == 1111 + 2222 + 3333 + 4444 + 555 + 666,
           f"未平倉總量 {tot}")
     plain, _ = cboe.parse_chain(payload, "20260821")
+    # --- 價格改用前一交易日收盤（美股的預設做法）---
+    pay2 = {"timestamp": "2026-08-26 14:34:16", "data": {
+        "symbol": "SPY", "close": 765.07, "current_price": 765.07,
+        "prev_day_close": 765.91, "last_trade_time": "2026-08-26T10:30:15",
+        "options": [
+            # 有 prev_day_close：要用它，不能用買賣中價
+            {"option": "SPY   260828C00760000", "bid": 9.0, "ask": 9.2,
+             "prev_day_close": 8.40, "open_interest": 100, "volume": 3},
+            {"option": "SPY   260828P00760000", "bid": 3.0, "ask": 3.2,
+             "prev_day_close": 3.55, "open_interest": 200, "volume": 4},
+            # 有未平倉但沒有前一日收盤：要被跳過並計數，不可以偷偷改用中價
+            {"option": "SPY   260828C00990000", "bid": 0.01, "ask": 0.02,
+             "prev_day_close": None, "open_interest": 50, "volume": 0},
+        ]}}
+    c2, m2 = cboe.parse_chain(pay2, "20260825", prev_td=prev, use_prev_close=True)
+    st = c2["20260828"]["strikes"][760.0]
+    check("美股價格取每一檔的前一交易日收盤",
+          st["C"]["settle"] == 8.40 and st["P"]["settle"] == 3.55,
+          f"買權 {st['C']['settle']} / 賣權 {st['P']['settle']}（中價會是 9.1 / 3.1）")
+    check("標的價取前一交易日收盤", m2["spot"] == 765.91, str(m2["spot"]))
+    check("沒有前一日收盤的合約被跳過並計數",
+          990.0 not in c2["20260828"]["strikes"] and m2["n_no_price"] == 1,
+          f"跳過 {m2['n_no_price']} 筆")
+    check("記錄了抓檔當下的場次日", m2["session_day"] == "20260826", m2["session_day"])
+    check("價格基準有標記", m2["price_basis"] == "prev_close", m2["price_basis"])
+    c3, m3 = cboe.parse_chain(pay2, "20260826", prev_td=prev, use_prev_close=False)
+    st3 = c3["20260828"]["strikes"][760.0]
+    check("關掉之後仍是原本的買賣中價",
+          abs(st3["C"]["settle"] - 9.1) < 1e-9 and m3["spot"] == 765.07,
+          f"買權 {st3['C']['settle']} / 標的 {m3['spot']}")
+
+    # --- 未平倉日期的反推要看假日表 ---
+    pay3 = {"data": {"options": [
+        {"option": "SPY   260826C00760000", "open_interest": 1000},
+        {"option": "SPY   260825C00760000", "open_interest": 0}]}}
+    check("未平倉日期反推：用假日表往前一個交易日",
+          cboe.oi_as_of(pay3, "20260826", prev_td=prev) == "20260825",
+          str(cboe.oi_as_of(pay3, "20260826", prev_td=prev)))
+
     check("沒給 am_roots 時維持 SPY / QQQ 的原本行為",
           set(plain) == {"20260918", "20260824"}, str(sorted(plain)))
 

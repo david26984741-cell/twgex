@@ -173,20 +173,39 @@ def load_us(args, sym):
     payload = (cboe.read_json_file(args.json) if args.json
                else cboe.fetch_json(spec0.get("cboe_symbol", sym)))
     hol = engine.load_holidays(os.path.join(HERE, spec0["calendar"]))
+    prev = lambda d: engine.prev_trading_day(d, hol)
     session = args.date or (None if args.json else us_last_session(hol))
-    # 未平倉量可能還沒跟上（OCC 隔一個營業日才發布），用資料本身推斷它是哪一天的
-    price_day = (payload.get("data", {}).get("last_trade_time") or "")[:10].replace("-", "")
-    oi_day = cboe.oi_as_of(payload, price_day or session or "99999999")
-    forced = oi_day or session
+
+    # CBOE 這份檔案裡，價格是即時的、未平倉量是 OCC 隔天早上才更新的，兩者永遠差一個交易日。
+    # 所以價格一律取每一檔的 prev_day_close（前一交易日收盤），這樣只要在
+    # 「未平倉更新後、當日收盤前」抓一次，價格與未平倉就是同一天的，也不怕排程延遲。
+    use_prev = not args.live_price
+    sess = (payload.get("data", {}).get("last_trade_time") or "")[:10].replace("-", "")
+    price_day = sess
+    if use_prev and sess:
+        y, m, dd = int(sess[:4]), int(sess[4:6]), int(sess[6:8])
+        price_day = prev(dt.date(y, m, dd)).strftime("%Y%m%d")
+    oi_day = cboe.oi_as_of(payload, sess or session or "99999999", prev_td=prev)
+    forced = oi_day or price_day or session
     chain_all, meta = cboe.parse_chain(
         payload, forced, am_roots=spec0.get("am_roots", ()),
-        prev_td=lambda d: engine.prev_trading_day(d, hol))
+        prev_td=prev, use_prev_close=use_prev)
+    meta["price_day"] = price_day
     day = forced or meta["trade_day"]
-    if oi_day and price_day and oi_day < price_day:
-        print(f"  註：未平倉量為 {oi_day} 收盤（OCC 尚未發布 {price_day}），"
-              f"報價為 {price_day} 收盤，本檔以未平倉日為準標示。", file=sys.stderr)
     if not day:
         raise SystemExit("CBOE 回傳裡找不到交易日")
+
+    # 對齊檢查：未平倉與價格必須是同一個交易日，不然畫出來的是拼裝圖
+    if oi_day and price_day and oi_day != price_day:
+        msg = (f"{sym}: 未平倉量是 {oi_day} 收盤、價格是 {price_day} 收盤，兩者不同日。\n"
+               f"    這通常表示抓得太早（OCC 大約在美東 10:00~10:30 才把前一日的未平倉發布出來）。\n"
+               f"    等未平倉更新後再跑一次即可；要強行產出請加 --allow-stale-oi。")
+        if not args.allow_stale_oi:
+            raise SystemExit("  " + msg)
+        print("  警告：" + msg, file=sys.stderr)
+    if oi_day is None:
+        print(f"  註：{sym} 的檔案不保留已到期序列，無法從資料反推未平倉日期，"
+              f"改用日曆推定為 {price_day}。", file=sys.stderr)
     chain = {e: chain_all[e] for e in cboe.live_expiries(chain_all, day)}
     prev_oi = {}
     hist = os.path.join(DATA, sym, "history")
@@ -199,9 +218,13 @@ def load_us(args, sym):
             for r in old["views"]["ALL"]["strikes"]:
                 prev_oi[("*", r["K"], "C")] = r["oc"]
                 prev_oi[("*", r["K"], "P")] = r["op"]
-    extra = {"quote_time": meta.get("quote_time"), "snapshot": meta.get("snapshot"),
+    # 價格取自前一交易日收盤時，last_trade_time 講的是「抓檔當下的場次」，
+    # 不是價格的時點，掛在 quote_time 會誤導；另外用 snapshot_at 記錄。
+    extra = {"quote_time": (None if use_prev else meta.get("quote_time")),
+             "snapshot_at": meta.get("quote_time"), "snapshot": meta.get("snapshot"),
              "iv30": meta.get("iv30"), "n_contracts_all": meta.get("n_contracts_all"),
-             "oi_as_of": fmt_date(oi_day), "price_as_of": fmt_date(price_day)}
+             "price_basis": meta.get("price_basis"), "session_day": fmt_date(sess),
+             "oi_as_of": fmt_date(oi_day or price_day), "price_as_of": fmt_date(price_day)}
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 
@@ -248,6 +271,10 @@ def main() -> int:
     ap.add_argument("--date"); ap.add_argument("--spot", type=float)
     ap.add_argument("--spot-file")
     ap.add_argument("--days-back", type=int, default=9)
+    ap.add_argument("--live-price", action="store_true",
+                    help="美股：用當下的買賣中價而不是前一交易日收盤（只適合盤中看即時結構）")
+    ap.add_argument("--allow-stale-oi", action="store_true",
+                    help="美股：即使未平倉與價格不同日也照樣產出")
     args = ap.parse_args()
 
     sym = args.symbol
