@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b1017">
+<title>每個數字怎麼用｜選擇權曝險地圖</title>
+<meta name="description" content="逐項說明曝險地圖上每一個數字、每一張圖、每一個控制項的定義、判讀方式與常見誤讀。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230f1620%27/%3E%3Crect x=%275%27 y=%2716%27 width=%274%27 height=%2711%27 fill=%27%23e66767%27/%3E%3Crect x=%2711%27 y=%279%27 width=%274%27 height=%2718%27 fill=%27%23e66767%27/%3E%3Crect x=%2717%27 y=%2713%27 width=%274%27 height=%2714%27 fill=%27%23199e70%27/%3E%3Crect x=%2723%27 y=%275%27 width=%274%27 height=%2722%27 fill=%27%23199e70%27/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#0b1017; --surface:#0f1620; --surface2:#141d29; --grid:#243040; --line:#1c2836;
+  --ink:#e6edf3; --ink2:#9aa7b4; --ink3:#6b7a8a;
+  --pos:#199e70; --neg:#e66767; --call:#3987e5; --put:#e66767;
+  --curve1:#199e70; --curve2:#9085e9;
+  --spot:#ffffff; --flip:#c98500; --flip2:#d55181;
+  --fs:1;
+}
+:root[data-cvd="1"]{ --pos:#3987e5; --neg:#d95926; --call:#3987e5; --put:#d95926; --curve1:#3987e5; --curve2:#9085e9; }
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
+  font-size:calc(14px * var(--fs));line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:#7fb2f0;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:920px;margin:0 auto;padding:18px 22px 72px}
+
+/* 頂列 */
+.top{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:space-between;
+  margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.back{display:inline-flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--line);
+  border-radius:8px;padding:6px 12px;color:var(--ink);font-size:calc(12.5px * var(--fs))}
+.back:hover{background:#1b2635;text-decoration:none}
+.seg{display:flex;background:var(--surface2);border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{appearance:none;background:none;border:0;color:var(--ink2);font:inherit;
+  font-size:calc(12px * var(--fs));padding:5px 10px;cursor:pointer;white-space:nowrap;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button:hover{color:var(--ink);background:#1b2635}
+.seg button[aria-pressed="true"]{background:#22304a;color:#fff}
+.ctl{display:flex;align-items:center;gap:7px}
+.ctl>label{color:var(--ink2);font-size:calc(12px * var(--fs));white-space:nowrap}
+
+h1{font-size:calc(21px * var(--fs));font-weight:600;margin:0;letter-spacing:.02em}
+.lede{color:var(--ink2);font-size:calc(13.5px * var(--fs));line-height:1.9;margin:0 0 20px}
+.lede b{color:var(--ink)}
+
+/* 目錄 */
+.toc{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:22px}
+.toc h2{font-size:calc(13px * var(--fs));margin:0 0 8px;font-weight:600}
+.toc ol{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:3px 16px}
+.toc li{font-size:calc(12.5px * var(--fs));line-height:1.85}
+.toc .grp{grid-column:1/-1;color:var(--ink3);font-size:calc(11.5px * var(--fs));margin-top:8px;
+  letter-spacing:.06em;border-top:1px solid var(--line);padding-top:7px}
+.toc .grp:first-child{margin-top:0;border-top:0;padding-top:0}
+
+/* 章節 */
+h2.sec{font-size:calc(15px * var(--fs));font-weight:600;margin:34px 0 4px;padding-top:10px;
+  border-top:1px solid var(--line);letter-spacing:.02em}
+h2.sec span{color:var(--ink3);font-weight:400;font-size:calc(12px * var(--fs));margin-left:8px}
+
+/* 條目 */
+.e{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:12px}
+.e>h3{font-size:calc(14.5px * var(--fs));font-weight:600;margin:0;display:flex;flex-wrap:wrap;
+  align-items:baseline;gap:8px}
+.e>h3 .where{font-size:calc(11px * var(--fs));font-weight:400;color:var(--ink3);
+  background:var(--surface2);border:1px solid var(--line);border-radius:5px;padding:1px 7px}
+.e .body{font-size:calc(13px * var(--fs));color:var(--ink2);line-height:1.9;margin-top:9px}
+.e .body b{color:var(--ink)}
+.e .body code{background:var(--surface2);padding:1px 5px;border-radius:4px;color:var(--ink);
+  font-size:calc(12px * var(--fs))}
+.row{display:flex;gap:10px;margin-top:9px}
+.row .k{flex:0 0 auto;width:calc(56px * var(--fs));color:var(--ink3);font-size:calc(11.5px * var(--fs));
+  padding-top:calc(3px * var(--fs));letter-spacing:.04em}
+.row .t{flex:1 1 auto;min-width:0}
+.row.bad .t{border-left:3px solid var(--neg);padding-left:11px}
+.row.act .t{border-left:3px solid var(--flip);padding-left:11px}
+.row.bad .k{color:var(--neg)}
+.row.act .k{color:var(--flip)}
+ul.tight{margin:4px 0 0;padding-left:18px}
+ul.tight li{margin-bottom:3px}
+
+/* 圖解 */
+figure{margin:12px 0 2px}
+figure svg{display:block;width:100%;max-width:calc(460px * var(--fs));height:auto;
+  background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+figcaption{font-size:calc(11.5px * var(--fs));color:var(--ink3);line-height:1.8;margin-top:7px;
+  max-width:calc(560px * var(--fs))}
+figcaption b{color:var(--ink2)}
+.figrow{display:flex;gap:14px;flex-wrap:wrap}
+.figrow>div{flex:1 1 240px;min-width:0}
+.figrow svg{max-width:100%}
+.figt{font-size:calc(12px * var(--fs));color:var(--ink);font-weight:600;margin:0 0 5px}
+.ax{fill:var(--ink3);font-size:10px;font-variant-numeric:tabular-nums}
+.gl{stroke:var(--grid);stroke-width:1}
+.zero{stroke:#3a4a5e;stroke-width:1.5}
+
+/* 表 */
+.tw{overflow-x:auto;margin-top:10px;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-size:calc(12.5px * var(--fs))}
+th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--ink2);font-weight:500;white-space:nowrap}
+td:first-child{white-space:nowrap;color:var(--ink)}
+td{color:var(--ink2)}
+
+.foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);
+  color:var(--ink3);font-size:calc(11.5px * var(--fs));line-height:1.9}
+.up{position:fixed;right:16px;bottom:16px;background:var(--surface2);border:1px solid var(--line);
+  border-radius:9px;padding:8px 12px;color:var(--ink2);font-size:calc(12px * var(--fs));
+  box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.up:hover{color:var(--ink);text-decoration:none}
+@media(max-width:760px){
+  .wrap{padding:14px calc(12px + env(safe-area-inset-right)) 56px calc(12px + env(safe-area-inset-left))}
+  .row{display:block}
+  .row .k{width:auto;margin-bottom:2px}
+  .row.bad .t,.row.act .t{padding-left:9px}
+  .toc ol{grid-template-columns:1fr 1fr}
+}
+@media(max-width:430px){ .toc ol{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="top">
+  <a class="back" href="index.html">← 回曝險地圖</a>
+  <div class="ctl"><label>字級</label>
+    <div class="seg" id="segFs">
+      <button data-v="0.88">小</button>
+      <button data-v="1" aria-pressed="true">標準</button>
+      <button data-v="1.15">大</button>
+      <button data-v="1.32">特大</button>
+    </div>
+  </div>
+</div>
+
+<h1>每個數字怎麼用</h1>
+<p class="lede">
+這一頁不是流程，是<b>字典</b>。地圖上看到哪一格不確定意思，就翻到那一格——每一則都用同一個格式寫：
+<b>是什麼 → 怎麼讀 → 別誤會 → 這格變了要做什麼</b>。<br>
+如果你要的是「今天打開網頁該按什麼順序看」，那是首頁最下面的<a href="index.html#dHow">五個步驟</a>，兩邊互補：
+五步驟教你走一遍，這一頁教你每一格的意思。
+</p>
+
+<nav class="toc" id="toc"><h2>快速跳到</h2><ol></ol></nav>
+
+<h2 class="sec" id="s-base">先講清楚三件事<span>不然底下每一格都會讀錯</span></h2>
+
+<div class="e" id="b1">
+  <h3 data-toc="造市商被迫做什麼">一、這裡的每一個數字，都是在回答「造市商被迫做什麼」</h3>
+  <div class="body">
+  賣選擇權給你的人（造市商、大型賣方）不賭方向，他們用標的來把部位的方向風險軋平。
+  可是這個軋平的動作<b>會隨著價格移動而失效</b>，所以他們得一直重新調整——而調整就是實際的買賣單。<br>
+  GEX、VEX、GEX+ 全部都是同一件事的不同切面：<b>價格或波動率動一格，這群人被迫在市場上買賣多少</b>。
+  數字的正負決定他們是「往回買賣」（穩定行情）還是「順著買賣」（放大行情）。
+  </div>
+  <figure>
+    <div class="figrow">
+      <div>
+        <div class="figt">總 GEX 為正</div>
+        <svg viewBox="0 0 300 120" role="img" aria-label="正 GEX 時造市商逆勢調整">
+          <line class="gl" x1="20" y1="60" x2="280" y2="60"></line>
+          <text class="ax" x="20" y="20">價格↑</text>
+          <path d="M60 46 L110 46" stroke="var(--pos)" stroke-width="2.5"></path>
+          <path d="M110 46 l-8 -4 l0 8 z" fill="var(--pos)"></path>
+          <text class="ax" x="118" y="50" style="fill:var(--pos)">造市商賣出</text>
+          <text class="ax" x="20" y="104">價格↓</text>
+          <path d="M60 86 L110 86" stroke="var(--pos)" stroke-width="2.5"></path>
+          <path d="M110 86 l-8 -4 l0 8 z" fill="var(--pos)"></path>
+          <text class="ax" x="118" y="90" style="fill:var(--pos)">造市商買進</text>
+        </svg>
+      </div>
+      <div>
+        <div class="figt">總 GEX 為負</div>
+        <svg viewBox="0 0 300 120" role="img" aria-label="負 GEX 時造市商順勢調整">
+          <line class="gl" x1="20" y1="60" x2="280" y2="60"></line>
+          <text class="ax" x="20" y="20">價格↑</text>
+          <path d="M60 46 L110 46" stroke="var(--neg)" stroke-width="2.5"></path>
+          <path d="M110 46 l-8 -4 l0 8 z" fill="var(--neg)"></path>
+          <text class="ax" x="118" y="50" style="fill:var(--neg)">造市商買進</text>
+          <text class="ax" x="20" y="104">價格↓</text>
+          <path d="M60 86 L110 86" stroke="var(--neg)" stroke-width="2.5"></path>
+          <path d="M110 86 l-8 -4 l0 8 z" fill="var(--neg)"></path>
+          <text class="ax" x="118" y="90" style="fill:var(--neg)">造市商賣出</text>
+        </svg>
+      </div>
+    </div>
+    <figcaption>同一個上漲，正 GEX 環境下引來的是<b>賣單</b>（把價格拉回），負 GEX 環境下引來的是<b>買單</b>（把價格推得更遠）。
+    所有「壓波動 / 放大波動」的說法都是從這張圖來的。</figcaption>
+  </figure>
+</div>
+
+<div class="e" id="b2">
+  <h3 data-toc="方向是假設">二、造市商的方向是「假設」，不是觀測值</h3>
+  <div class="body">
+  公開資料只有未平倉口數，<b>沒有告訴你誰是買方、誰是賣方</b>。所以每一個數字都建立在一個假設上，
+  就是控制列的「造市商假設」：<br>
+  <b>買權多・賣權空（預設）</b>——假設散戶買 call、賣 put，造市商站在反面。這是業界最通用的版本。<br>
+  <b>兩邊皆空</b>——假設造市商兩邊都是賣方，這時候幾乎所有履約價都是負 gamma，總 GEX 通常翻負、Flip 會消失。<br>
+  兩個假設得到的結論可能完全相反。<b>看到任何一個結論，先確認它是在哪個假設下算出來的。</b>
+  </div>
+</div>
+
+<div class="e" id="b3">
+  <h3 data-toc="地形圖不是天氣">三、地形圖，不是天氣預報</h3>
+  <div class="body">
+  這張圖說的是「如果價格走到那裡，會遇到什麼」，<b>不說價格會不會走到那裡</b>。<br>
+  下面有坑，不代表會跌；沒有坑，也不代表跌不下去——只代表跌下去的時候，沒有人幫你踩煞車。<br>
+  把 GEX 當進出場訊號用，等於把地形圖當導航。它的正確用法是<b>調整你既有判斷的部位大小與停損寬度</b>。
+  </div>
+</div>
+
+<h2 class="sec" id="s-head">標題那一行<span>資料的身分證，先確認它才有資格看下面</span></h2>
+
+<div class="e" id="h-date">
+  <h3>交易日 <span class="where">標題列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      這份快照對應的<b>收盤</b>日期。不是「今天」，是資料所屬的那個交易日。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      台指是台灣時間當天收盤後才會有；美股四檔（SPX / SPY / QQQ / ES）看到的是<b>前一個美股交易日</b>的收盤，
+      因為未平倉量要等 OCC / CME 隔天早上才發布。所以台灣時間週三早上看，美股那邊顯示的是週一收盤，這是正常的。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      這不是盤中即時資料。盤中價格已經在動，但這張圖上的未平倉還停在昨天收盤，
+      <b>行情走得越遠，這張圖越舊</b>。開盤後大跌 2%，圖上的 Flip 位置就要自己心裡打折。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      如果標題上方跳出黃色提醒說「資料日期與報價日期不同」，先別用這份資料下結論，等隔天更新。</div></div>
+  </div>
+</div>
+
+<div class="e" id="h-spot">
+  <h3>現貨 S ／ 期貨 <span class="where">標題列・摘要卡</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      整張圖的參考點。所有「距現貨 %」、所有價平位置，都是相對這個數字算的。<br>
+      台指 TXO 用<b>加權指數收盤</b>；SPX / SPY / QQQ 用<b>標的前一交易日收盤</b>；
+      ES 用<b>主力月期貨結算價</b>（所以那一格寫的是「期貨」不是「現貨」）。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      ES 的參考點是期貨不是現貨指數，兩者會差幾十點（利率與股利的價差）。
+      拿 ES 的 Flip 直接對照 SPX 現貨的價位會系統性偏移。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      看的是外資與大盤的關係就用 SPX；看的是夜盤與台灣時間的連動就用 ES，但心裡記得它是期貨的座標系。</div></div>
+  </div>
+</div>
+
+<div class="e" id="h-legs">
+  <h3>契約數 ／ 到期日數 <span class="where">標題列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      這份快照裡真正被算進去的<b>履約價×買賣權組合數</b>，以及涵蓋幾個結算日。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      這兩個數字唯一的用途是<b>檢查資料有沒有缺</b>。台指正常是一千多份、9 個左右到期日；
+      美股正常是八千到一萬份、30 個左右到期日。突然掉到平常的一半，就是來源缺資料，不是市場變了。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      契約數多不代表市場活躍，只代表掛出來的履約價多。真正的活躍度要看未平倉與成交量。</div></div>
+  </div>
+</div>
+
+<div class="e" id="h-oi">
+  <h3>未平倉 <span class="where">標題列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      所有履約價、所有到期日的未平倉<b>總口數</b>。整個市場現在「還開著」多少張合約。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      跟前幾天比。結算日之後會斷崖式下降（那批到期了），這是正常的；
+      在<b>沒有結算的日子</b>總量卻明顯縮水，代表有人在平倉，圖上的牆會跟著變薄。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      未平倉<b>不等於</b> gamma。一萬口的遠月履約價，在 GEX 上的份量可能還不如一千口的當週價平。
+      把口數當曝險看是這張圖最常見的誤用（詳見<a href="#c-wall">未平倉牆</a>）。</div></div>
+  </div>
+</div>
+
+<div class="e" id="h-cov">
+  <h3>OI 覆蓋 <span class="where">標題列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      有未平倉的合約當中，<b>成功反解出隱含波動率</b>、因此進得了計算的比例。
+      深價外沒有成交價、或報價明顯異常的合約會被剔除。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      正常在 90% 以上。低於 80% 就代表這天有相當一部分未平倉沒被算進去，
+      所有總量都會偏小、Flip 位置也可能偏掉。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      覆蓋率突然掉下來的那一天，把它當「這天資料品質差」處理，不要拿它跟其他天做趨勢比較。</div></div>
+  </div>
+</div>
+
+<h2 class="sec" id="s-sum">曝險摘要面板<span>整張圖的結論都濃縮在這一塊</span></h2>
+
+<div class="e" id="c-gex">
+  <h3>總 GEX <span class="where">摘要卡・最上面那個大數字</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      把所有履約價的 gamma 曝險加總。單位是<b>「標的每移動 1%，造市商要調整多少金額」</b>——
+      台指是億元、美股是百萬美元。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      <b>正</b>：造市商逆勢調整（漲了要賣、跌了要買），行情傾向被磨在區間裡，日內振幅收斂。<br>
+      <b>負</b>：造市商順勢調整（漲了要買、跌了要賣），任何一點變動都會被放大，容易出現尾盤加速。<br>
+      絕對值代表這股力量有多大，但<b>只有跟自己的歷史比才有意義</b>——台指的 18 億跟美股的 5,000 百萬不能互比，
+      同一檔昨天 25 億今天 18 億才是資訊。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      「正 GEX = 會漲」是錯的。正 GEX 只說<b>波動會被壓</b>，方向由別的東西決定。
+      正 GEX 的盤一樣可以慢慢陰跌，只是跌得很無聊。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      正 GEX 且數字厚 → 區間策略、賣方策略的環境比較友善，突破容易假。<br>
+      負 GEX → 停損要放寬（會被掃），部位要縮小（振幅會超出預期），順勢比逆勢好做。</div></div>
+  </div>
+</div>
+
+<div class="e" id="c-flip">
+  <h3>Gamma Flip <span class="where">摘要卡</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      把標的價格<b>假設性地平移</b>，整本選擇權重算一次，找出「總 GEX 由正翻負」的那個價位。
+      它是一條門檻，不是一個支撐。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      現貨在 Flip <b>之上</b> → 目前處在壓波動的區域。<br>
+      現貨掉到 Flip <b>之下</b> → 進入放大波動的區域，同樣的消息會打出更大的 K 線。<br>
+      下面那行「距現貨 −3.7%」才是真正要看的東西：<b>還有多少緩衝</b>。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      這是<b>整套讀法最容易錯、也最值錢</b>的一點：「距現貨 %」變大有兩種完全不同的來歷。<br>
+      <b>(A)</b> Flip 沒動、現貨自己往上跑 → 緩衝是價格墊出來的，跌回原點門檻還在原地等，什麼都沒改善。<br>
+      <b>(B)</b> 現貨沒動、Flip 自己往下退 → 才是結構真的多讓出一層，有人在下面補了正 gamma。<br>
+      這兩件事在<b>今天這一格</b>上長得一模一樣。要分辨，只能用「資料日期」往回切幾天，
+      把現貨與 Flip 分別記下來，看是誰在動。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      緩衝 &gt; 3~4%：結構上還有餘裕。<br>
+      緩衝 &lt; 1~2%：一根中黑就會跨過去，隔日的振幅預期要往上調。<br>
+      現貨已經在 Flip 之下：不要用區間思維交易。</div></div>
+  </div>
+  <figure>
+    <svg viewBox="0 0 460 150" role="img" aria-label="Gamma Flip 是情境曲線與零軸的交叉點">
+      <line class="gl" x1="40" y1="20" x2="440" y2="20"></line>
+      <line class="gl" x1="40" y1="55" x2="440" y2="55"></line>
+      <line class="zero" x1="40" y1="90" x2="440" y2="90"></line>
+      <text class="ax" x="6" y="93">0</text>
+      <path d="M60 128 C120 120 160 104 196 90 C240 73 300 44 420 30" fill="none" stroke="var(--curve1)" stroke-width="2.4"></path>
+      <line x1="196" y1="26" x2="196" y2="140" stroke="var(--flip)" stroke-width="1.6" stroke-dasharray="4 3"></line>
+      <circle cx="196" cy="90" r="4" fill="var(--flip)"></circle>
+      <text class="ax" x="200" y="140" style="fill:var(--flip)">Gamma Flip</text>
+      <line x1="330" y1="26" x2="330" y2="140" stroke="var(--spot)" stroke-width="1.6"></line>
+      <text class="ax" x="334" y="140" style="fill:var(--spot)">現貨</text>
+      <text class="ax" x="70" y="112" style="fill:var(--neg)">總 GEX 為負</text>
+      <text class="ax" x="352" y="62" style="fill:var(--pos)">總 GEX 為正</text>
+      <text class="ax" x="214" y="16" style="fill:var(--ink3)">← 緩衝 →</text>
+    </svg>
+    <figcaption>Flip 就是<b>情境曲線穿過零軸的那一點</b>——所以你在「GEX vs GEX+ 情境曲線」那張圖上，
+    可以直接看到它，還能順便看到<b>曲線穿過零軸時有多陡</b>。陡＝跨過去以後性質變得很快；
+    平＝跨過去也還在半死不活的地帶。摘要卡只給你點的位置，圖給你斜率。示意圖，非實際盤面。</figcaption>
+  </figure>
+</div>
+
+<div class="e" id="c-flipp">
+  <h3>GEX+ Flip <span class="where">摘要卡</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      同樣是零軸交叉，但用的是 <code>GEX+ = GEX + β×VEX</code>，也就是<b>把「跌的時候波動率會上升」一起算進去</b>之後的門檻。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      因為總 VEX 幾乎永遠是負的，GEX+ Flip <b>通常比 Gamma Flip 高</b>——真實世界的門檻比純 gamma 的版本更早到。<br>
+      兩條 Flip 之間的距離，就是「波動率效應吃掉了多少緩衝」。距離越寬，代表這個結構對波動率越敏感。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      GEX+ Flip 的位置<b>取決於你把 β 調到多少</b>，那是一個假設不是市場報價。
+      看到一個 GEX+ Flip 數字，先看它旁邊寫的 β 是多少。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      實際使用時以 <b>GEX+ Flip</b> 為主要門檻，Gamma Flip 當作「最樂觀情況下的下限」。</div></div>
+  </div>
+</div>
+
+<div class="e" id="c-vex">
+  <h3>總 VEX <span class="where">摘要卡</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      <b>vanna</b> 曝險的總和：隱含波動率每上升 1 個波動點，造市商要調整多少標的。<br>
+      注意這裡的 VEX 是 <b>vanna</b>（delta 對波動率的敏感度），不是 vega。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      幾乎永遠是<b>負的</b>，這是結構使然（市場長期偏向賣上方買權、買下方賣權）。
+      所以問題不是「正還是負」，而是<b>有多負</b>。<br>
+      它的意思是：<b>波動率一跳，這群人要倒出多少標的到市場上</b>。這個數字越大（越負），
+      下跌時的自我強化就越猛——跌 → VIX 升 → 被迫賣 → 又跌。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      VEX 不是「波動率會不會上升」的預測，是「如果上升了會怎樣」的換算。
+      平靜的日子它一樣很負，什麼都不會發生。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      總 VEX 明顯比前幾天更負，而總 GEX 又在變薄 → 這是同一件事的兩個訊號：
+      <b>結構同時變得更容易被推動、也更容易被波動率點燃</b>。這種組合出現時值得縮部位。</div></div>
+  </div>
+</div>
+
+<div class="e" id="c-gexp">
+  <h3>總 GEX+ <span class="where">摘要卡</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      <code>GEX + β×VEX</code>。把 gamma 效應與 vanna 效應合成一個數字。β 的意思是
+      「標的每移動 1%，隱含波動率反向變動幾個波動點」，預設 1.0。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      這是三個總量裡<b>最接近真實環境</b>的一個。實務上先看它的正負與斜率，
+      再回頭用 GEX 與 VEX 拆解「這個結果主要是誰造成的」。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      GEX+ 只是把兩個效應線性相加，真實市場的 gamma 與 vanna 不會這麼乖。
+      它是<b>比較用的合成指標</b>，不是可以外推的模型。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      把 β 拉到 0 再拉到 2，看 GEX+ Flip 移動多少。移動很小 → 這個結構主要由 gamma 決定；
+      移動很大 → 波動率才是主角，要更看重 VEX 那一側。</div></div>
+  </div>
+</div>
+
+<div class="e" id="c-vega">
+  <h3>總 vega 曝險 <span class="where">摘要卡</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      隱含波動率每上升 1 個波動點，造市商<b>部位的帳面損益</b>變動多少。
+      跟 VEX 不同：VEX 講的是「要去買賣多少標的」（會產生市場衝擊），vega 講的是「帳上賺賠多少」（不會）。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      當作規模的參考。它告訴你這批部位對波動率的<b>總曝險有多大</b>，
+      是判斷「今天這張圖代表的資金量級」的背景數字。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      不要拿它當交易訊號。它不對應任何被迫的買賣動作，因此不會直接影響價格。</div></div>
+  </div>
+</div>
+
+<div class="e" id="c-conc">
+  <h3>正 GEX 集中 ／ 負 GEX 集中 <span class="where">摘要卡・下方標籤列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      GEX 最大的前五個履約價（正的＝牆，在上方居多）與最負的前五個（坑，在下方居多）。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      看<b>距現貨幾 %</b> 比看絕對價位有用。牆＝價格靠近時會被推回來的位置；坑＝價格掉進去會加速的位置。<br>
+      牆與坑之間那一段，就是這個結構「預設」的日內活動區間。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      榜上常常有一個<b>貼著現價、未平倉其實不多</b>的履約價。它上榜純粹是因為價平的每口 gamma 最大——
+      這是<b>現價的影子，明天現價換位置它就跟著換</b>，不是固定的地形。<br>
+      真正的牆是那些靠實打實未平倉堆出來、價格走到哪它都在原地的履約價。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      要分辨真假牆，把「資料表（逐履約價）」打開，比對那個履約價的 Call / Put 未平倉口數。
+      口數少的就是影子，別拿它當支撐壓力。</div></div>
+  </div>
+</div>
+
+<div class="e" id="c-vconc">
+  <h3>負 VEX 集中 <span class="where">摘要卡・下方標籤列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      vanna 曝險最負的前五個履約價：波動率一跳，這幾個位置的避險需求反轉得最劇烈。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      單獨看它意義不大。它的價值在<b>跟「正 GEX 集中」對照</b>：<br>
+      如果同一批履約價同時出現在兩張榜上，那是<b>同一批部位的兩張臉</b>——
+      賣上方買權收租的部位，平常提供正 gamma 幫忙把價格磨在區間裡，
+      但它的 vanna 是負的，波動率一跳就翻臉。<br>
+      <b>平常幫忙壓波動的那幾堵牆，就是波動來的時候最先鬆手的那幾堵。</b></div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      兩張榜的重疊程度，就是「這張地圖有多脆」的量尺。重疊多 → 這個看起來很穩的盤，
+      其實是靠同一批部位撐的，禁不起一次波動率跳升。</div></div>
+  </div>
+</div>
+
+<div class="e" id="c-wall">
+  <h3>未平倉牆 ／ P/C <span class="where">摘要卡・下方標籤列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      未平倉最多的那個 Call 履約價、最多的那個 Put 履約價，以及 Put/Call 未平倉比。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      這是<b>純口數</b>的視角，跟 GEX 完全獨立。傳統上 Call 牆被當成上檔壓力、Put 牆被當成下檔支撐，
+      這個看法在<b>接近結算</b>時比較有效，因為那時候每口的 gamma 才夠大。<br>
+      P/C 是情緒面的粗略指標，看方向與變化，不看絕對值。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      口數多 ≠ 曝險大。一個五萬口的季選履約價，在 GEX 上的份量可能不到一個五千口當週價平的一半。
+      <b>如果未平倉牆跟 GEX 集中區指到不同的價位，以 GEX 為準。</b></div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      把未平倉牆當成「大家在哪裡下注」的地圖，把 GEX 集中區當成「哪裡真的會產生買賣單」的地圖。
+      兩者重疊的位置最值得注意。</div></div>
+  </div>
+</div>
+
+<div class="e" id="c-outside">
+  <h3 data-toc="範圍外那行小字">輸出範圍外的那一行小字 <span class="where">摘要卡・最下方</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      顯示區間（±5% / ±10% / ±20%）之外還有多少履約價、多少未平倉，以及它們佔總 GEX 的比例。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      這行是<b>誠實聲明</b>：畫面上沒畫出來的那些，已經算進上面的總量了。<br>
+      如果它顯示「佔總 GEX 0.3%」，代表遠端的履約價其實沒什麼份量，你看到的圖就是全貌。
+      如果佔到 10% 以上，代表有相當份量的結構在畫面外，要把顯示區間放大再看一次。</div></div>
+  </div>
+</div>
+
+<h2 class="sec" id="s-chart">四張圖<span>摘要卡是結論，圖是把結論拆開來看</span></h2>
+
+<div class="e" id="g-gex">
+  <h3>GEX 各履約價 <span class="where">左上</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      橫軸是履約價，縱軸是該履約價的 gamma 曝險。綠色（正）往上、紅色（負）往下。
+      白色垂直線是現貨，橘色虛線是 Gamma Flip。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      不要一根一根看，先看<b>形狀</b>：<br>
+      <b>現貨上方一大片綠、下方一片紅</b> → 標準的「上有蓋、下有洞」，向上磨、向下滑。<br>
+      <b>綠色集中在很窄的幾根</b> → 結構脆，那幾個履約價一結算或一被平倉，整張圖就變了。<br>
+      <b>綠色平均散開</b> → 厚實，不會因為單一到期日消失。<br>
+      <b>現貨正好卡在一根大綠柱上</b> → 被釘住的盤，容易整天不動。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      柱子的高度是<b>金額</b>不是口數。同樣高的兩根柱子，一根可能是幾百口的當週價平，
+      另一根是幾千口的月選價外，性質完全不同。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      滑鼠移上去（手機是按住）會顯示那個履約價的明細：Call / Put 的未平倉、GEX、VEX。
+      對榜上前幾名的履約價都掃一遍，你就知道哪幾根是真牆。</div></div>
+  </div>
+</div>
+
+<div class="e" id="g-vex">
+  <h3>VEX 各履約價 <span class="where">右上</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      同一條履約價軸上的 vanna 曝險。顏色分的是<b>買權主導還是賣權主導</b>，不是正負。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      看兩件事：<b>重心在現貨的哪一邊</b>，以及<b>跟 GEX 圖的形狀有沒有重疊</b>。<br>
+      負 VEX 集中在現貨下方 → 跌的時候，被迫賣出的壓力集中在下方，容易加速。<br>
+      負 VEX 集中在現貨上方，而那裡剛好也是正 GEX 的牆 → 見<a href="#c-vconc">負 VEX 集中</a>，
+      這是「同一批部位的兩張臉」。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      這張圖畫的是 <b>vanna</b> 不是 vega。它回答「波動率變了要買賣多少標的」，
+      不回答「波動率變了帳上賺賠多少」。</div></div>
+  </div>
+</div>
+
+<div class="e" id="g-curve">
+  <h3>GEX vs GEX+ 情境曲線 <span class="where">左下</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      把標的價格從 −x% 掃到 +x%，<b>每一個假設價位都把整本選擇權重算一次</b>，畫出總 GEX（綠）與總 GEX+（紫）。
+      這是唯一一張「如果……會怎樣」的圖。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      <b>交叉點</b>：曲線穿過零軸的地方就是兩條 Flip。摘要卡給你點，這裡給你<b>斜率</b>。<br>
+      <b>斜率</b>：穿越得很陡 → 跨過門檻後性質變化很快，一旦破就破得乾脆；
+      很平 → 跨過去之後也還在模糊地帶，不會立刻惡化。<br>
+      <b>兩條線的間距</b>：紫線離綠線越遠，代表波動率效應在這個價位吃掉越多緩衝。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      這是<b>瞬間平移</b>的假設：把價格搬過去、其他一切不變。真實的下跌會伴隨波動率上升、
+      有人平倉、有人加碼，整張圖會跟著重畫。所以離現貨越遠的那一段，可信度越低。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      只看現貨附近 ±3% 那一段，其他當參考。這段的形狀就是「明後天最可能的地形」。</div></div>
+  </div>
+</div>
+
+<div class="e" id="g-exp">
+  <h3>到期日結構拆解 <span class="where">整頁最下方那張寬圖</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">是什麼</div><div class="t">
+      把 GEX 依<b>結算日</b>拆開。柱子是各到期日的 GEX，點線是各到期日的未平倉口數。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      要問的問題只有一個：<b>現在這些厚度是誰撐的？</b><br>
+      如果單一到期日的 GEX 就佔了大半，代表整張圖看起來的穩定幾乎都是那一格給的——
+      <b>那天結算完，扶著的手就鬆了</b>。<br>
+      這一步給的是<b>時間軸</b>，不是價位。價位每天會重算，日期不會挪。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      <b>未平倉最多的到期日，不一定是 GEX 最大的到期日。</b>
+      越接近到期，每一口的 gamma 越大，所以近月常常用比較少的口數撐出更大的曝險；
+      結算之後接手的那批遠月，撐不出同樣的厚度。柱子跟點線指到不同格，就是這個現象。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      把「護甲脫掉」的日子寫進行事曆。台指看週三結算，美股看週五與月選、季選。
+      結算日的<b>隔天</b>才是結構最薄的時候。</div></div>
+  </div>
+</div>
+
+<h2 class="sec" id="s-ctl">控制列的六個選項<span>每一個都會改變結論，不是外觀設定</span></h2>
+
+<div class="e" id="k-date">
+  <h3>資料日期 <span class="where">控制列（有歷史資料時才出現）</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">用途</div><div class="t">
+      切回前幾天的快照。<b>這是整個網站最重要的一個控制項</b>，因為所有總量的單日數字都沒有意義，
+      要看的是斜率。</div></div>
+    <div class="row act"><div class="k">怎麼用</div><div class="t">
+      往回切 3~5 天，每天記下四個數字：<b>現貨、總 GEX、總 VEX、Gamma Flip</b>。<br>
+      三個總量一起往同一個方向走（正的變薄、負的變厚），就算今天還沒跨過零，
+      也代表<b>這面牆正在被拆</b>。只看今天你只會說「結構還行」。<br>
+      這也是分辨<a href="#c-flip">Flip 緩衝的兩種來歷</a>的唯一方法。</div></div>
+  </div>
+</div>
+
+<div class="e" id="k-exp">
+  <h3>到期別 <span class="where">控制列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">用途</div><div class="t">
+      只看某一個結算日的結構，或看全部合併。</div></div>
+    <div class="row"><div class="k">怎麼用</div><div class="t">
+      <b>合併</b>是預設，代表整體環境。<br>
+      切到<b>最近的那個到期日</b>，看到的是今明兩天真正在起作用的那批——尤其結算週，
+      近月的 gamma 佔比會非常高，合併看反而被遠月稀釋掉。<br>
+      切到<b>結算後的下一個到期日</b>，看到的就是「這週結算完之後，接手的地形長什麼樣」。</div></div>
+    <div class="row act"><div class="k">動作</div><div class="t">
+      結算日前一天做這個對照：先看當週的圖，再看下一期的圖。兩張差很多，就代表結算後會換一張地圖。</div></div>
+  </div>
+</div>
+
+<div class="e" id="k-band">
+  <h3>顯示區間 <span class="where">控制列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">用途</div><div class="t">
+      畫面上顯示現貨 ±5% / ±10% / ±20% 的履約價。<b>只影響畫面，不影響總量</b>——
+      範圍外的一律已經算進總 GEX 裡（摘要卡最下面那行小字會告訴你有多少）。</div></div>
+    <div class="row act"><div class="k">怎麼用</div><div class="t">
+      日內交易看 ±5%，細節才看得清楚。判斷整體結構看 ±10%。
+      ±20% 主要用來檢查「有沒有很遠的地方藏著大部位」。</div></div>
+  </div>
+</div>
+
+<div class="e" id="k-bucket">
+  <h3>履約價分桶 <span class="where">控制列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">用途</div><div class="t">
+      把相鄰的履約價合併成 50 / 100 / 200 點一格再畫，讓形狀更清楚。</div></div>
+    <div class="row act"><div class="k">怎麼用</div><div class="t">
+      台指的週選與月選履約價間距不同（50 點 vs 100 點），<b>合併所有到期別看的時候，
+      建議把分桶調成 100 點</b>，否則週選的密集履約價會讓圖看起來鋸齒狀、月選的柱子被誇大。<br>
+      美股標的（SPY / QQQ）履約價本來就密，用 1~5 點的原始履約價看細節、粗分桶看形狀。</div></div>
+    <div class="row bad"><div class="k">別誤會</div><div class="t">
+      分桶只改變畫法，不改變總量。但它會改變「哪一根最高」——粗分桶時，
+      摘要卡的集中區榜單（用原始履約價算）跟圖上的最高柱可能對不起來。</div></div>
+  </div>
+</div>
+
+<div class="e" id="k-sign">
+  <h3>造市商假設 <span class="where">控制列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">用途</div><div class="t">
+      這是整張圖唯一無法從資料觀測、只能假設的東西。見<a href="#b2">前面第二點</a>。</div></div>
+    <div class="row"><div class="k">兩個選項</div><div class="t">
+      <b>買權多・賣權空</b>（預設，業界通用）：造市商在買權端是多方、賣權端是空方。
+      這是絕大多數 GEX 網站採用的版本，所以要跟別人的數字比對時用這個。<br>
+      <b>兩邊皆空</b>：造市商兩端都是賣方。這時候幾乎所有履約價都變成負 gamma，
+      總 GEX 通常翻負、<b>Flip 會直接消失顯示成「—」</b>（因為整條曲線都在零軸下方）。</div></div>
+    <div class="row act"><div class="k">怎麼用</div><div class="t">
+      把它當成<b>壓力測試</b>：切到「兩邊皆空」，看你的結論會不會反過來。
+      如果會，代表那個結論完全靠假設撐著，可信度要打折。</div></div>
+  </div>
+</div>
+
+<div class="e" id="k-beta">
+  <h3>β 滑桿 <span class="where">控制列</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">用途</div><div class="t">
+      設定「標的每移動 1%，隱含波動率反向變動幾個波動點」。這是 GEX+ 唯一的參數。</div></div>
+    <div class="row"><div class="k">怎麼讀</div><div class="t">
+      <b>β = 0</b>：完全不考慮波動率效應，GEX+ 等於 GEX，兩條 Flip 重合。<br>
+      <b>β = 1</b>（預設）：溫和假設。<br>
+      <b>β = 2</b>：波動率反應很敏感的環境，例如已經在高波動狀態、或有事件在前面。</div></div>
+    <div class="row act"><div class="k">怎麼用</div><div class="t">
+      當作<b>敏感度分析</b>而不是要調到「正確值」。從 0 拉到 2，看 GEX+ Flip 跑多遠：<br>
+      跑很少 → 這個結構由 gamma 主導，看 GEX 就夠。<br>
+      跑很遠 → 波動率才是主角，要更看重 VEX 那一側，而且對「GEX+ Flip 在哪」這件事本身要保守。</div></div>
+  </div>
+</div>
+
+<h2 class="sec" id="s-tbl">兩張資料表<span>所有「這根柱子到底是誰堆的」都在這裡驗證</span></h2>
+
+<div class="e" id="t-strike">
+  <h3>資料表（逐履約價） <span class="where">頁面下方・可展開</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">用途</div><div class="t">
+      每個履約價的 Call / Put 未平倉、GEX、VEX 原始數字。</div></div>
+    <div class="row act"><div class="k">主要用法</div><div class="t">
+      驗證<b>真牆還是影子</b>：把摘要卡上「正 GEX 集中」的履約價抄下來，到表裡查它的未平倉口數。
+      口數很少卻排在榜首 → 那是價平 gamma 造成的影子，明天就換位置。<br>
+      口數很大 → 那是實體的牆，價格走到哪它都在原地。</div></div>
+    <div class="row"><div class="k">附帶</div><div class="t">
+      表格只在展開時才計算，收起來就清空——這是為了讓切換標的保持順暢，不是資料掉了。</div></div>
+  </div>
+</div>
+
+<div class="e" id="t-exp">
+  <h3>到期別明細 <span class="where">頁面下方・可展開</span></h3>
+  <div class="body">
+    <div class="row"><div class="k">用途</div><div class="t">
+      每個結算日的 GEX、VEX、未平倉、剩餘交易日。</div></div>
+    <div class="row act"><div class="k">主要用法</div><div class="t">
+      算<b>集中度</b>：最大那個到期日的 GEX 除以全部到期日的合計。超過一半，
+      就代表這張地圖有明確的<b>有效期限</b>。</div></div>
+  </div>
+</div>
+
+<h2 class="sec" id="s-unit">單位與時點<span>看數字之前先確認你在看什麼刻度</span></h2>
+
+<div class="e" id="u-1">
+  <h3>單位速查</h3>
+  <div class="tw">
+  <table>
+    <thead><tr><th>數字</th><th>單位</th><th>白話</th></tr></thead>
+    <tbody>
+      <tr><td>總 GEX ／ 各履約價 GEX</td><td>億元（台指）／ 百萬美元（美股）÷ 標的移動 1%</td>
+          <td>標的漲跌 1%，造市商要調整多少錢的部位</td></tr>
+      <tr><td>總 VEX ／ 各履約價 VEX</td><td>同上 ÷ 波動率 1 點</td>
+          <td>隱含波動率升 1 點，造市商要買賣多少錢的標的</td></tr>
+      <tr><td>總 GEX+</td><td>同 GEX</td><td>把上面兩者用 β 合成的結果</td></tr>
+      <tr><td>總 vega 曝險</td><td>同上 ÷ 波動率 1 點</td><td>波動率升 1 點，部位帳面賺賠多少（不產生買賣單）</td></tr>
+      <tr><td>Gamma Flip ／ GEX+ Flip</td><td>指數點 ／ 股價</td><td>總量翻負的那個價位</td></tr>
+      <tr><td>距現貨 %</td><td>百分比</td><td>還有多少緩衝</td></tr>
+      <tr><td>未平倉</td><td>口（合約張數）</td><td>還開著幾張合約，跟金額無關</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="body">
+    <b>不同標的的數字不能互比</b>，因為單位與市值規模都不同。同一檔跟自己的歷史比，才有意義。
+  </div>
+</div>
+
+<div class="e" id="u-2">
+  <h3>資料時點</h3>
+  <div class="body">
+    <div class="row"><div class="k">台指</div><div class="t">
+      期交所盤後公布，台灣時間當天傍晚更新，對應<b>當天收盤</b>。</div></div>
+    <div class="row"><div class="k">美股</div><div class="t">
+      未平倉量由 OCC 在<b>隔天美東時間上午</b>才發布，所以站上顯示的一律是
+      <b>前一個美股交易日的收盤</b>——價格與未平倉都取同一天的收盤，兩者對齊。<br>
+      這是刻意的：如果用即時價格配昨天的未平倉，會得到一張<b>兩個時點混在一起</b>的圖，
+      Flip 的位置會錯。寧可晚一天，也不要混。</div></div>
+    <div class="row"><div class="k">ES</div><div class="t">
+      CME 的結算表與成交量表，對應<b>前一個交易時段的結算</b>。參考點是主力月期貨結算價。</div></div>
+    <div class="row bad"><div class="k">共通限制</div><div class="t">
+      全部都是<b>收盤快照</b>。盤中沒有任何一家（包含付費服務）能拿到即時未平倉，
+      因為交易所根本不即時公布。任何宣稱「即時 GEX」的東西，未平倉部分一定還是昨天的。</div></div>
+  </div>
+</div>
+
+<h2 class="sec" id="s-limit">最後：什麼時候整張圖失效</h2>
+
+<div class="e" id="l-1">
+  <h3 data-toc="四種失效情況">四種情況下，這張地圖不要用</h3>
+  <div class="body">
+  <ul class="tight">
+    <li><b>事件的隱含振幅大過整張地圖的寬度。</b>財報、FOMC、選舉這種日子，
+        牆與坑不再是路障，只是里程碑——價格會直接穿過去。</li>
+    <li><b>結算日當天與隔天。</b>撐著地圖的那批部位正在消失或剛消失，
+        圖上畫的是還沒發生的重組。</li>
+    <li><b>OI 覆蓋率明顯偏低的那一天。</b>資料本身不完整，總量偏小、Flip 位置不可靠。</li>
+    <li><b>盤中已經走了一大段。</b>快照停在昨天收盤，走越遠越舊。跌了 2% 以後，
+        圖上寫的「距 Flip 還有 3%」實際上只剩 1%。</li>
+  </ul>
+  </div>
+</div>
+
+<div class="e" id="l-2">
+  <h3 data-toc="它唯一能做的事">它能做的，其實只有一件事</h3>
+  <div class="body">
+  <b>調整你已經有的判斷的部位大小與停損寬度。</b><br>
+  你從別的地方得到方向判斷（技術面、基本面、消息面），這張圖告訴你：
+  在那個方向上走的時候，路面是被鋪平的還是有坑。<br>
+  正 GEX 環境下的突破要打折，負 GEX 環境下的回檔要留餘裕——這就是它全部的用途。<br>
+  它不產生方向，不產生進出場點。
+  </div>
+</div>
+
+<div class="foot">
+  這一頁的每一則說明對應本站實際顯示的欄位與控制項，計算方式見首頁的
+  <a href="index.html">「怎麼算的、以及不能拿它做什麼」</a>。<br>
+  讀圖框架參考了羊叔開講（gooptions.cc）對 GEX 結構圖的公開解說，內容由本站以自己的話重寫並對應到本站欄位；
+  所有數字與計算皆由本專案自公開資料獨立產生，與該站無關。<br>
+  本頁僅供研究參考，不構成投資建議。
+</div>
+
+</div>
+<a class="up" href="#" id="up">↑ 回頂端</a>
+<script>
+(function () {
+  var PREF = 'gexmap.pref';
+  function load() { try { return JSON.parse(localStorage.getItem(PREF) || '{}'); } catch (e) { return {}; } }
+  function save(p) { try { localStorage.setItem(PREF, JSON.stringify(p)); } catch (e) {} }
+  var seg = document.getElementById('segFs');
+  function applyFs(v) {
+    document.documentElement.style.setProperty('--fs', String(v));
+    [].forEach.call(seg.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', Math.abs(parseFloat(b.dataset.v) - v) < 1e-9);
+    });
+  }
+  var pref = load();
+  applyFs(pref.fs || 1);
+  if (pref.cvd === '1') document.documentElement.setAttribute('data-cvd', '1');
+  seg.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button'); if (!b) return;
+    var v = parseFloat(b.dataset.v);
+    applyFs(v); var p = load(); p.fs = v; save(p);
+  });
+
+  /* 目錄自動生成 */
+  var ol = document.querySelector('#toc ol'), html = '';
+  [].forEach.call(document.querySelectorAll('h2.sec, .e > h3'), function (el) {
+    if (el.tagName === 'H2') {
+      html += '<li class="grp">' + el.firstChild.textContent.trim() + '</li>';
+    } else {
+      var id = el.parentNode.id;
+      var name = el.dataset.toc || el.childNodes[0].textContent.trim();
+      html += '<li><a href="#' + id + '">' + name + '</a></li>';
+    }
+  });
+  ol.innerHTML = html;
+
+  document.getElementById('up').addEventListener('click', function (ev) {
+    ev.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>
