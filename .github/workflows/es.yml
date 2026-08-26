@@ -4,10 +4,17 @@ name: ES 曝險地圖（原始檔上傳後自動建圖）
 # 所以「抓資料」這一步只能在自己的機器上用瀏覽器做：
 #   開 tools/cme.html → 按開始抓 → 得到 raw/cme_ES.json → 上傳到 repo
 # 檔案一進 main，這個 workflow 就接手把圖算出來並提交 data/ES/。
+#
+# 觸發條件刻意放寬：原本只掛 `paths: raw/cme_ES.json`，2026/08/26 實測有一次
+# 明明只改了那個檔卻沒有被觸發（GitHub 的路徑過濾偶爾會漏），資料就整天沒更新。
+# 現在改成「除了 data/ 以外的推送都跑」，再由下面的「檢查原始檔」自己判斷
+# 原始檔是不是真的比現有的圖新——不是就直接結束，不會白算也不會亂提交。
+# 排除 data/ 是為了避免這個 workflow 被自己提交的結果再觸發一次。
 on:
   push:
-    paths:
-      - 'raw/cme_ES.json'
+    branches: [main]
+    paths-ignore:
+      - 'data/**'
   workflow_dispatch:
 
 permissions:
@@ -33,6 +40,7 @@ jobs:
         run: python selftest.py
 
       - name: 檢查原始檔
+        id: chk
         run: |
           python - <<'PY'
           import json, sys
@@ -49,12 +57,25 @@ jobs:
           bad = [s['code'] for s in d['series'] if s.get('oiSrc') not in ('F', 'P')]
           if bad:
               print(f"::warning::{len(bad)} 個系列的未平倉退回前一日：{' '.join(bad[:10])}")
+
+          # 原始檔是不是真的比現有的圖新？不是就直接結束，不必重算。
+          import os
+          td = d.get('tradeDate', '')                      # MM/DD/YYYY
+          day = (td[6:10] + td[0:2] + td[3:5]) if len(td) == 10 else ''
+          cur = ''
+          if os.path.exists('data/ES/latest.json'):
+              cur = json.load(open('data/ES/latest.json', encoding='utf-8'))['meta']['trade_date'].replace('/', '')
+          print(f"原始檔 {day}　現有的圖 {cur or '（還沒有）'}")
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f"fresh={'1' if (day and day > cur) else '0'}\n")
           PY
 
       - name: 產生 ES 資料
+        if: steps.chk.outputs.fresh == '1'
         run: python build.py --symbol ES --json raw/cme_ES.json
 
       - name: 提交
+        if: steps.chk.outputs.fresh == '1'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
