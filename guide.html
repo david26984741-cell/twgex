@@ -83,6 +83,38 @@ ul.tight li{margin-bottom:3px}
 
 /* 圖解 */
 figure{margin:12px 0 2px}
+.ex{margin:14px 0 2px;padding:11px 12px 9px;background:var(--surface2);
+    border:1px solid var(--line);border-radius:10px}
+.ex svg{display:block;width:100%;max-width:calc(500px * var(--fs));height:auto;background:none;border:0;padding:0}
+.ex figcaption{font-size:calc(11.5px * var(--fs));color:var(--ink3);line-height:1.8;
+    margin-top:9px;padding-top:8px;border-top:1px solid var(--line);max-width:none}
+.ex figcaption b{color:var(--ink2)}
+.ex .tag{display:inline-block;font-size:calc(10px * var(--fs));color:var(--ink3);
+    border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-right:6px;vertical-align:1px}
+/* 真實畫面導覽 */
+.shot{position:relative;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+.shot img{display:block;width:100%;height:auto}
+.shot .bx{position:absolute;border:1.5px solid rgba(201,133,0,.45);border-radius:6px;pointer-events:none}
+.shot .mk{position:absolute;transform:translate(0,-50%);display:flex;align-items:center;gap:6px;
+  text-decoration:none;white-space:nowrap;z-index:2}
+.shot .mk.r{transform:translate(-100%,-50%);flex-direction:row-reverse}
+.shot .mk b{display:flex;align-items:center;justify-content:center;flex:0 0 auto;
+  width:calc(22px * var(--fs));height:calc(22px * var(--fs));border-radius:50%;
+  background:var(--flip);color:#160f00;font-size:calc(12px * var(--fs));font-weight:700;
+  box-shadow:0 2px 8px rgba(0,0,0,.6)}
+.shot .mk span{background:rgba(11,16,23,.9);border:1px solid var(--line);border-radius:6px;
+  padding:2px 8px;font-size:calc(11.5px * var(--fs));color:var(--ink)}
+.shot .mk:hover span{background:#1b2b3d;color:#fff}
+.maplg{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 0 0;font-size:calc(12px * var(--fs))}
+.maplg a{display:inline-flex;align-items:center;gap:5px;color:var(--ink2)}
+.maplg a:hover{color:var(--ink);text-decoration:none}
+.maplg b{display:inline-flex;align-items:center;justify-content:center;
+  width:calc(17px * var(--fs));height:calc(17px * var(--fs));border-radius:50%;
+  background:var(--flip);color:#160f00;font-size:calc(10.5px * var(--fs))}
+@media(max-width:760px){
+  .shot .mk span{display:none}
+  .shot .mk b{width:calc(19px * var(--fs));height:calc(19px * var(--fs));font-size:calc(11px * var(--fs))}
+}
 figure svg{display:block;width:100%;max-width:calc(460px * var(--fs));height:auto;
   background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
 figcaption{font-size:calc(11.5px * var(--fs));color:var(--ink3);line-height:1.8;margin-top:7px;
@@ -116,6 +148,8 @@ td{color:var(--ink2)}
   .row .k{width:auto;margin-bottom:2px}
   .row.bad .t,.row.act .t{padding-left:9px}
   .toc ol{grid-template-columns:1fr 1fr}
+  .e{padding:12px 11px}
+  .ex{margin:12px -7px 2px;padding:9px 7px 8px}
 }
 @media(max-width:430px){ .toc ol{grid-template-columns:1fr} }
 </style>
@@ -139,11 +173,39 @@ td{color:var(--ink2)}
 <p class="lede">
 這一頁不是流程，是<b>字典</b>。地圖上看到哪一格不確定意思，就翻到那一格——每一則都用同一個格式寫：
 <b>是什麼 → 怎麼讀 → 別誤會 → 這格變了要做什麼</b>。<br>
+每一則都配一張<b>示範例子的圖</b>，圖上直接標出要看哪裡；文字是給想追細節的人看的，不看也不影響。<br>
 如果你要的是「今天打開網頁該按什麼順序看」，那是首頁最下面的<a href="index.html#dHow">五個步驟</a>，兩邊互補：
 五步驟教你走一遍，這一頁教你每一格的意思。
 </p>
 
 <nav class="toc" id="toc"><h2>快速跳到</h2><ol></ol></nav>
+
+<section class="mapwrap" id="s-map">
+  <h2 class="sec" id="h-map" style="border-top:0;padding-top:0;margin-top:26px">先認畫面<span>點號碼直接跳到那一則的說明</span></h2>
+  <p style="color:var(--ink2);font-size:calc(12.5px * var(--fs));line-height:1.85;margin:0 0 12px">
+  這是網站打開之後的樣子。<b>八個區塊，每一塊底下管哪些數字</b>——點號碼就跳到那一區的說明。
+  底下每一則都配一張示範例子的圖，不用把文字讀完也能抓到重點。</p>
+  <div class="shot">
+    <img src="guide-map.jpg" alt="曝險地圖整頁畫面，標了八個區塊的號碼" loading="lazy" width="1280" height="1861">
+    <i class="bx" style="left:1.72%;top:4.37%;width:96.56%;height:1.67%"></i>
+    <i class="bx" style="left:1.72%;top:11.33%;width:96.56%;height:5.11%"></i>
+    <i class="bx" style="left:3.05%;top:20.66%;width:45.0%;height:14.4%"></i>
+    <i class="bx" style="left:51.95%;top:20.66%;width:45.0%;height:14.4%"></i>
+    <i class="bx" style="left:3.05%;top:39.87%;width:45.0%;height:14.4%"></i>
+    <i class="bx" style="left:51.95%;top:38.59%;width:45.0%;height:26.2%"></i>
+    <i class="bx" style="left:3.05%;top:69.6%;width:93.91%;height:13.43%"></i>
+    <i class="bx" style="left:1.72%;top:84.49%;width:96.56%;height:2.48%"></i>
+    <a class="mk r" href="#s-head" style="left:88.0%;top:6.45%"><b>1</b><span>標題那一行</span></a>
+    <a class="mk r" href="#s-ctl" style="left:94.0%;top:15.05%"><b>2</b><span>控制列</span></a>
+    <a class="mk" href="#g-gex" style="left:5.0%;top:23.83%"><b>3</b><span>GEX 各履約價</span></a>
+    <a class="mk" href="#g-vex" style="left:54.0%;top:23.83%"><b>4</b><span>VEX 各履約價</span></a>
+    <a class="mk" href="#g-curve" style="left:5.0%;top:43.04%"><b>5</b><span>情境曲線</span></a>
+    <a class="mk r" href="#s-sum" style="left:96.5%;top:39.45%"><b>6</b><span>曝險摘要</span></a>
+    <a class="mk" href="#g-exp" style="left:5.0%;top:72.29%"><b>7</b><span>到期日結構拆解</span></a>
+    <a class="mk r" href="#s-tbl" style="left:88.0%;top:85.73%"><b>8</b><span>兩張資料表</span></a>
+  </div>
+  <p class="maplg"><a href="#s-head"><b>1</b>標題那一行</a> <a href="#s-ctl"><b>2</b>控制列</a> <a href="#g-gex"><b>3</b>GEX 各履約價</a> <a href="#g-vex"><b>4</b>VEX 各履約價</a> <a href="#g-curve"><b>5</b>情境曲線</a> <a href="#s-sum"><b>6</b>曝險摘要</a> <a href="#g-exp"><b>7</b>到期日結構拆解</a> <a href="#s-tbl"><b>8</b>兩張資料表</a></p>
+</section>
 
 <h2 class="sec" id="s-base">先講清楚三件事<span>不然底下每一格都會讀錯</span></h2>
 
@@ -155,40 +217,6 @@ td{color:var(--ink2)}
   GEX、VEX、GEX+ 全部都是同一件事的不同切面：<b>價格或波動率動一格，這群人被迫在市場上買賣多少</b>。
   數字的正負決定他們是「往回買賣」（穩定行情）還是「順著買賣」（放大行情）。
   </div>
-  <figure>
-    <div class="figrow">
-      <div>
-        <div class="figt">總 GEX 為正</div>
-        <svg viewBox="0 0 300 120" role="img" aria-label="正 GEX 時造市商逆勢調整">
-          <line class="gl" x1="20" y1="60" x2="280" y2="60"></line>
-          <text class="ax" x="20" y="20">價格↑</text>
-          <path d="M60 46 L110 46" stroke="var(--pos)" stroke-width="2.5"></path>
-          <path d="M110 46 l-8 -4 l0 8 z" fill="var(--pos)"></path>
-          <text class="ax" x="118" y="50" style="fill:var(--pos)">造市商賣出</text>
-          <text class="ax" x="20" y="104">價格↓</text>
-          <path d="M60 86 L110 86" stroke="var(--pos)" stroke-width="2.5"></path>
-          <path d="M110 86 l-8 -4 l0 8 z" fill="var(--pos)"></path>
-          <text class="ax" x="118" y="90" style="fill:var(--pos)">造市商買進</text>
-        </svg>
-      </div>
-      <div>
-        <div class="figt">總 GEX 為負</div>
-        <svg viewBox="0 0 300 120" role="img" aria-label="負 GEX 時造市商順勢調整">
-          <line class="gl" x1="20" y1="60" x2="280" y2="60"></line>
-          <text class="ax" x="20" y="20">價格↑</text>
-          <path d="M60 46 L110 46" stroke="var(--neg)" stroke-width="2.5"></path>
-          <path d="M110 46 l-8 -4 l0 8 z" fill="var(--neg)"></path>
-          <text class="ax" x="118" y="50" style="fill:var(--neg)">造市商買進</text>
-          <text class="ax" x="20" y="104">價格↓</text>
-          <path d="M60 86 L110 86" stroke="var(--neg)" stroke-width="2.5"></path>
-          <path d="M110 86 l-8 -4 l0 8 z" fill="var(--neg)"></path>
-          <text class="ax" x="118" y="90" style="fill:var(--neg)">造市商賣出</text>
-        </svg>
-      </div>
-    </div>
-    <figcaption>同一個上漲，正 GEX 環境下引來的是<b>賣單</b>（把價格拉回），負 GEX 環境下引來的是<b>買單</b>（把價格推得更遠）。
-    所有「壓波動 / 放大波動」的說法都是從這張圖來的。</figcaption>
-  </figure>
 </div>
 
 <div class="e" id="b2">
@@ -329,26 +357,6 @@ td{color:var(--ink2)}
       緩衝 &lt; 1~2%：一根中黑就會跨過去，隔日的振幅預期要往上調。<br>
       現貨已經在 Flip 之下：不要用區間思維交易。</div></div>
   </div>
-  <figure>
-    <svg viewBox="0 0 460 150" role="img" aria-label="Gamma Flip 是情境曲線與零軸的交叉點">
-      <line class="gl" x1="40" y1="20" x2="440" y2="20"></line>
-      <line class="gl" x1="40" y1="55" x2="440" y2="55"></line>
-      <line class="zero" x1="40" y1="90" x2="440" y2="90"></line>
-      <text class="ax" x="6" y="93">0</text>
-      <path d="M60 128 C120 120 160 104 196 90 C240 73 300 44 420 30" fill="none" stroke="var(--curve1)" stroke-width="2.4"></path>
-      <line x1="196" y1="26" x2="196" y2="140" stroke="var(--flip)" stroke-width="1.6" stroke-dasharray="4 3"></line>
-      <circle cx="196" cy="90" r="4" fill="var(--flip)"></circle>
-      <text class="ax" x="200" y="140" style="fill:var(--flip)">Gamma Flip</text>
-      <line x1="330" y1="26" x2="330" y2="140" stroke="var(--spot)" stroke-width="1.6"></line>
-      <text class="ax" x="334" y="140" style="fill:var(--spot)">現貨</text>
-      <text class="ax" x="70" y="112" style="fill:var(--neg)">總 GEX 為負</text>
-      <text class="ax" x="352" y="62" style="fill:var(--pos)">總 GEX 為正</text>
-      <text class="ax" x="214" y="16" style="fill:var(--ink3)">← 緩衝 →</text>
-    </svg>
-    <figcaption>Flip 就是<b>情境曲線穿過零軸的那一點</b>——所以你在「GEX vs GEX+ 情境曲線」那張圖上，
-    可以直接看到它，還能順便看到<b>曲線穿過零軸時有多陡</b>。陡＝跨過去以後性質變得很快；
-    平＝跨過去也還在半死不活的地帶。摘要卡只給你點的位置，圖給你斜率。示意圖，非實際盤面。</figcaption>
-  </figure>
 </div>
 
 <div class="e" id="c-flipp">
@@ -804,6 +812,7 @@ td{color:var(--ink2)}
 
 </div>
 <a class="up" href="#" id="up">↑ 回頂端</a>
+<script src="guide-figs.js"></script>
 <script>
 (function () {
   var PREF = 'gexmap.pref';
@@ -829,7 +838,12 @@ td{color:var(--ink2)}
   var ol = document.querySelector('#toc ol'), html = '';
   [].forEach.call(document.querySelectorAll('h2.sec, .e > h3'), function (el) {
     if (el.tagName === 'H2') {
-      html += '<li class="grp">' + el.firstChild.textContent.trim() + '</li>';
+      var name = el.firstChild.textContent.trim();
+      html += '<li class="grp">' + name + '</li>';
+      // 這一章如果沒有任何條目（例如導覽圖），本身就給一個連結
+      var nx = el.nextElementSibling, has = false;
+      while (nx && nx.tagName !== 'H2') { if (nx.classList.contains('e')) { has = true; break; } nx = nx.nextElementSibling; }
+      if (!has && el.id) html += '<li><a href="#' + el.id + '">看整頁畫面</a></li>';
     } else {
       var id = el.parentNode.id;
       var name = el.dataset.toc || el.childNodes[0].textContent.trim();
@@ -837,6 +851,21 @@ td{color:var(--ink2)}
     }
   });
   ol.innerHTML = html;
+
+  /* 每一則配一張示範例子 */
+  var F = window.GUIDE_FIGS || {}, U = window.GUIDE_FIG_UTILS || {};
+  Object.keys(F).forEach(function (id) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    var out = F[id]();
+    (Array.isArray(out) ? out : [out]).forEach(function (f) {
+      var fig = document.createElement('figure');
+      fig.className = 'ex';
+      fig.innerHTML = U.svg(f.h, f.body) +
+        '<figcaption><span class="tag">示範例子</span>' + f.cap + '</figcaption>';
+      host.appendChild(fig);
+    });
+  });
 
   document.getElementById('up').addEventListener('click', function (ev) {
     ev.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' });
