@@ -301,6 +301,47 @@ def cme_tests():
           "月份不符時回 None，避免併到別的系列")
 
 
+def oi_delta_tests():
+    """未平倉增減：前一日的來源有兩種鍵，配錯會讓 Δ 等於整個未平倉量。"""
+    import build
+
+    class Leg:
+        def __init__(self, exp, K, cp, oi):
+            self.exp, self.K, self.cp, self.oi = exp, K, cp, oi
+            self.gamma = self.vanna = self.vega = self.iv = 0.0
+
+    legs = [Leg("20260828", 100.0, "C", 500), Leg("20260904", 100.0, "C", 300),
+            Leg("20260828", 100.0, "P", 200)]
+
+    # (1) 逐到期別的前一日（期交所路徑）：逐口相減
+    per_exp = {("20260828", 100.0, "C"): 400, ("20260904", 100.0, "C"): 250,
+               ("20260828", 100.0, "P"): 200}
+    r = build.strike_components(legs, 100.0, per_exp, 1.0)[0]
+    check("逐到期別的前一日：Δ 是逐口相減",
+          r["dc"] == 150 and r["dp"] == 0, f'dc={r["dc"]} dp={r["dp"]}')
+
+    # (2) 只有逐履約價合計的前一日（美股 / CME 從自家 JSON 讀回）
+    by_k = {("*", 100.0, "C"): 700, ("*", 100.0, "P"): 260}
+    r = build.strike_components(legs, 100.0, by_k, 1.0)[0]
+    check("只有履約價合計時：加總後再相減，不是每一口都減 0",
+          r["oc"] == 800 and r["dc"] == 100 and r["dp"] == -60, f'dc={r["dc"]} dp={r["dp"]}')
+
+    # (3) 這正是修掉的 bug：以前 Δ 會等於整個未平倉量
+    check("不會再出現「Δ 等於未平倉量」",
+          r["dc"] != r["oc"] and r["dp"] != r["op"])
+
+    # (4) 逐到期別的視圖在只有合計的情況下算不出來，要標成 None 而不是硬算
+    r = build.strike_components([l for l in legs if l.exp == "20260828"],
+                                100.0, by_k, 1.0, per_expiry=True)[0]
+    check("逐到期別視圖在資料不足時標成 None",
+          r["dc"] is None and r["dp"] is None, f'dc={r["dc"]}')
+
+    # (5) 前一日整個缺（第一天）
+    r = build.strike_components(legs, 100.0, {}, 1.0)[0]
+    check("完全沒有前一日時，Δ 等於未平倉量（第一天的正常結果）",
+          r["dc"] == r["oc"] and r["dp"] == r["op"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
@@ -311,6 +352,8 @@ def main():
     chain_tests()
     print()
     cme_tests()
+    print()
+    oi_delta_tests()
     if a.csv:
         print()
         data_tests(a.csv, a.date)

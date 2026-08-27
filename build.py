@@ -52,10 +52,17 @@ def pick_reference_forward(live, diag, forwards):
     return forwards[e], e
 
 
-def strike_components(legs, S_ref, prev_oi, mult):
+def strike_components(legs, S_ref, prev_oi, mult, per_expiry=False):
     s2 = mult * S_ref * S_ref * 0.01
     sw = -mult * S_ref / 100.0
     sv = mult / 100.0
+    # 前一日的未平倉有兩種來源：期交所原始檔給得到「逐到期別 × 逐履約價」，
+    # 美股 / CME 只能從前一天產出的 JSON 讀回「逐履約價合計」，鍵是 ("*", K, cp)。
+    # 後者不能逐口相減（配不到到期別，prev 會變成 0，Δ 就等於整個未平倉量），
+    # 要等履約價加總完再一次相減。
+    by_strike = any(k[0] == "*" for k in prev_oi)
+    # 只有逐履約價合計時，逐到期別的增減算不出來（前一日沒有拆到期別），標成 None。
+    unknown = by_strike and per_expiry
     acc = {}
     for lg in legs:
         K = round(lg.K, 2)
@@ -63,7 +70,7 @@ def strike_components(legs, S_ref, prev_oi, mult):
                                "vc": 0.0, "vp": 0.0, "oc": 0, "op": 0,
                                "dc": 0, "dp": 0, "ivn": 0.0, "ivd": 0.0})
         g, w, v = lg.gamma * lg.oi * s2, lg.vanna * lg.oi * sw, lg.vega * lg.oi * sv
-        prev = prev_oi.get((lg.exp, lg.K, lg.cp), 0)
+        prev = 0 if by_strike else prev_oi.get((lg.exp, lg.K, lg.cp), 0)
         if lg.cp == "C":
             a["gc"] += g; a["wc"] += w; a["vc"] += v
             a["oc"] += lg.oi; a["dc"] += lg.oi - prev
@@ -71,6 +78,13 @@ def strike_components(legs, S_ref, prev_oi, mult):
             a["gp"] += g; a["wp"] += w; a["vp"] += v
             a["op"] += lg.oi; a["dp"] += lg.oi - prev
         a["ivn"] += lg.iv * lg.oi; a["ivd"] += lg.oi
+    if unknown:
+        for a in acc.values():
+            a["dc"] = a["dp"] = None
+    elif by_strike and prev_oi:
+        for K, a in acc.items():
+            a["dc"] = a["oc"] - prev_oi.get(("*", K, "C"), 0)
+            a["dp"] = a["op"] - prev_oi.get(("*", K, "P"), 0)
     out = []
     for K in sorted(acc):
         a = acc[K]
@@ -216,8 +230,8 @@ def load_us(args, sym):
             prior = past[-1]
             old = json.load(open(os.path.join(hist, prior + ".json"), encoding="utf-8"))
             for r in old["views"]["ALL"]["strikes"]:
-                prev_oi[("*", r["K"], "C")] = r["oc"]
-                prev_oi[("*", r["K"], "P")] = r["op"]
+                prev_oi[("*", round(r["K"], 2), "C")] = r["oc"]
+                prev_oi[("*", round(r["K"], 2), "P")] = r["op"]
     # 價格取自前一交易日收盤時，last_trade_time 講的是「抓檔當下的場次」，
     # 不是價格的時點，掛在 quote_time 會誤導；另外用 snapshot_at 記錄。
     extra = {"quote_time": (None if use_prev else meta.get("quote_time")),
@@ -250,8 +264,8 @@ def load_cme(args, sym):
             prior = past[-1]
             old = json.load(open(os.path.join(hist, prior + ".json"), encoding="utf-8"))
             for r in old["views"]["ALL"]["strikes"]:
-                prev_oi[("*", r["K"], "C")] = r["oc"]
-                prev_oi[("*", r["K"], "P")] = r["op"]
+                prev_oi[("*", round(r["K"], 2), "C")] = r["oc"]
+                prev_oi[("*", round(r["K"], 2), "P")] = r["op"]
     extra = {"n_contracts_all": meta.get("n_contracts_all"),
              "n_requests": meta.get("n_requests"),
              "oi_asof": meta.get("oi_asof"), "oi_report": meta.get("oi_report"),
@@ -319,7 +333,7 @@ def main() -> int:
         sel = legs if key == "ALL" else [l for l in legs if l.exp == key]
         if not sel:
             continue
-        st_all = strike_components(sel, S_ref, prev_oi, mult)
+        st_all = strike_components(sel, S_ref, prev_oi, mult, per_expiry=(key != "ALL"))
         st = [r for r in st_all if lo_k <= r["K"] <= hi_k]
         out_band = [r for r in st_all if not (lo_k <= r["K"] <= hi_k)]
         views[key] = {

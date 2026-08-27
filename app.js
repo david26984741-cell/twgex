@@ -8,6 +8,8 @@ let UNIT = '億元';
 const $ = (s) => document.querySelector(s);
 const fmt = (v, d = 2) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
 const fmtK = (v) => v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+/* 未平倉增減：算不出來時是 null（例如選了單一到期別，而前一日只留下逐履約價合計） */
+const fmtD = (v) => v == null ? '—' : (v >= 0 ? '+' : '−') + fmtK(Math.abs(v));
 // 價格 / 履約價：台指是四五位數整數，美股是三位數帶小數，小數位要跟著量級走
 const fmtP = (v) => v == null ? '—' : Math.abs(v) >= 10000
   ? v.toLocaleString('en-US', { maximumFractionDigits: 0 })
@@ -90,6 +92,23 @@ function mountDates(idx) {
   $('#ctlDate').style.display = '';
 }
 
+/* 網址狀態：#TXO 或 #QQQ@20260825。
+   之前切標的完全不動網址，重新整理一定跳回第一個標的，也沒辦法把「QQQ 這一天」傳給別人。 */
+function readHash() {
+  const h = decodeURIComponent((location.hash || '').replace(/^#/, '')).trim();
+  if (!h) return {};
+  const [sym, day] = h.split('@');
+  return { sym: (sym || '').toUpperCase(), day: /^\d{8}$/.test(day || '') ? day : undefined };
+}
+function writeHash() {
+  const cur = S.data && S.data.meta, sel = $('#selDate');
+  const isLatest = !sel.value || getComputedStyle($('#ctlDate')).display === 'none'
+                   || sel.selectedIndex === 0;
+  const h = '#' + S.sym + (isLatest ? '' : '@' + sel.value);
+  if (location.hash !== h) history.replaceState(null, '', h);
+  const p = loadPref(); p.sym = S.sym; savePref(p);       // 沒帶網址時回到上次看的標的
+}
+
 async function switchTo(sym, day) {
   const box = $('#err');
   try {
@@ -104,6 +123,7 @@ async function switchTo(sym, day) {
     methodology();
     howto();
     render();
+    writeHash();
     box.style.display = 'none';
   } catch (err) {
     box.style.display = 'block';
@@ -153,17 +173,36 @@ function renderSymNote(sym) {
   box.style.display = '';
   box.innerHTML = n.what + (n.more ? '　' + n.more : '')
     + (n.size ? `<span class="sz">${n.size}</span>` : '');
+  box.classList.toggle('clamped', isNarrow());     // 手機先摺起來，讓圖早一點出現
+}
+
+/* 預設顯示區間：±20% 常常把 8~9 成的曝險擠在中間三分之一，兩側全是幾乎為零的長條。
+   改成挑「能涵蓋八成 |GEX| 的最窄選項」——一般日子會落在 ±10%，
+   遇到曝險真的很分散的日子才自動放寬。上限用資料裡的 default_view_band。 */
+function pickBand(cap) {
+  const st = (S.data.views.ALL || {}).strikes || [], S0 = S.data.meta.s_ref;
+  const opts = [...$('#selBand').options].map(o => parseFloat(o.value))
+    .filter(v => v <= cap + 1e-9).sort((a, b) => a - b);
+  if (!opts.length) return cap;
+  if (!st.length || !S0) return opts[opts.length - 1];
+  const g = r => Math.abs((r.gc || 0) - (r.gp || 0));
+  const tot = st.reduce((a, r) => a + g(r), 0);
+  if (!tot) return opts[opts.length - 1];
+  for (const b of opts) {
+    const inb = st.reduce((a, r) => a + (Math.abs(r.K / S0 - 1) <= b ? g(r) : 0), 0);
+    if (inb / tot >= 0.80) return b;
+  }
+  return opts[opts.length - 1];
 }
 
 function applyMeta() {
   const m = S.data.meta;
   E = m.unit_div || 1e8;
   UNIT = m.unit || '億元';
-  S.band = m.default_view_band || 0.20;
   const sb = $('#selBand');                    // option 的字串與數值不一定字面相等，用數值比對
-  const opt = [...sb.options].find(o => Math.abs(parseFloat(o.value) - S.band) < 1e-9)
-           || [...sb.options].reduce((a, o) =>
-                Math.abs(parseFloat(o.value) - S.band) < Math.abs(parseFloat(a.value) - S.band) ? o : a);
+  const want = pickBand(m.default_view_band || 0.20);
+  const opt = [...sb.options].reduce((a, o) =>
+    Math.abs(parseFloat(o.value) - want) < Math.abs(parseFloat(a.value) - want) ? o : a);
   sb.value = opt.value; S.band = parseFloat(opt.value);
   mountBuckets();
   $('#mDate').textContent = m.trade_date;
@@ -216,9 +255,12 @@ function buckets() {
     const k = b > 0 ? +(Math.round(r.K / b) * b).toFixed(4) : r.K;
     let a = m.get(k);
     if (!a) m.set(k, a = { K: k, gc: 0, gp: 0, wc: 0, wp: 0, vc: 0, vp: 0,
-                           oc: 0, op: 0, dc: 0, dp: 0, ivn: 0, ivd: 0 });
+                           oc: 0, op: 0, dc: null, dp: null, ivn: 0, ivd: 0 });
     a.gc += r.gc; a.gp += r.gp; a.wc += r.wc; a.wp += r.wp; a.vc += r.vc; a.vp += r.vp;
-    a.oc += r.oc; a.op += r.op; a.dc += r.dc; a.dp += r.dp;
+    a.oc += r.oc; a.op += r.op;
+    // 前一日未平倉不可得時是 null，不能當成 0 加進來（會變成「整批都是新倉」）
+    if (r.dc != null) a.dc = (a.dc || 0) + r.dc;
+    if (r.dp != null) a.dp = (a.dp || 0) + r.dp;
     if (r.iv != null) { a.ivn += r.iv * (r.oc + r.op); a.ivd += r.oc + r.op; }
   }
   const out = [...m.values()].sort((x, y) => x.K - y.K);
@@ -560,18 +602,34 @@ function drawExpiry(host) {
 
   const bars = rows.map((r, i) => {
     const cx = cw * (i + 0.5);
+    const on = S.exp !== 'ALL' && r.code === S.exp;      // 目前選的那一個到期別
     const p = el('path', { d: barPath(cx - bw / 2, bw, y(0), y(r.gex)),
                            fill: r.gex >= 0 ? 'var(--pos)' : 'var(--neg)' }, g);
+    if (S.exp !== 'ALL' && !on) p.setAttribute('opacity', .28);   // 其他的淡掉
+    if (on) {                                             // 選到的加一圈框，一眼看得出在哪
+      const top = Math.min(y(0), y(r.gex));
+      el('rect', { x: cx - bw / 2 - 3, y: top - 3,
+                   width: bw + 6, height: Math.abs(y(r.gex) - y(0)) + 6,
+                   fill: 'none', stroke: 'var(--ink)', 'stroke-width': 1.5, rx: 3,
+                   'pointer-events': 'none' }, g);
+      el('text', { class: 'ax', x: Math.min(Math.max(cx, 26), iw - 26),
+                   y: Math.max(top - 9, 10), 'text-anchor': 'middle',
+                   fill: 'var(--ink)', 'pointer-events': 'none' }, g).textContent = '目前選的';
+    }
     el('text', { class: 'ax', x: cx, y: ih + 16 * F, 'text-anchor': 'end',
-                 transform: `rotate(-38 ${cx} ${ih + 16 * F})` }, g).textContent = r.ltd;
+                 transform: `rotate(-38 ${cx} ${ih + 16 * F})`,
+                 fill: on ? 'var(--ink)' : null }, g).textContent = r.ltd;
     return p;
   });
 
+  const one = S.exp !== 'ALL';
   const d = rows.map((r, i) => (i ? 'L' : 'M') + (cw * (i + 0.5)).toFixed(1) + ' ' + y(r.gexp).toFixed(1)).join('');
-  el('path', { d, fill: 'none', stroke: 'var(--curve2)', 'stroke-width': 2, 'stroke-linecap': 'round' }, g);
+  el('path', { d, fill: 'none', stroke: 'var(--curve2)', 'stroke-width': 2, 'stroke-linecap': 'round',
+               opacity: one ? .3 : null }, g);
   rows.forEach((r, i) => el('circle', {
     cx: cw * (i + 0.5), cy: y(r.gexp), r: 4, fill: 'var(--curve2)',
-    stroke: 'var(--surface)', 'stroke-width': 2, 'pointer-events': 'none' }, g));
+    stroke: 'var(--surface)', 'stroke-width': 2, 'pointer-events': 'none',
+    opacity: one && r.code !== S.exp ? .3 : null }, g));
 
   hoverBars(svg, g, { iw, ih, left: m.l }, bars,
     px => (px < 0 || px > iw) ? -1 : Math.floor(px / cw),
@@ -618,10 +676,12 @@ function drawSummary(rows, cv, flip, flipP) {
       <div class="tile"><div class="k">${spotWord()} S</div><div class="v">${fmtP(S0)}</div><div class="s">${meta.s_ref_source}</div></div>
       <div class="tile"><div class="k">Gamma Flip</div>
         <div class="v" style="color:var(--flip)">${fmtP(flip)}</div>
-        <div class="s">距${spotWord()} ${dist(flip)}</div></div>
+        <div class="s">${flip == null ? '整條曲線都在零軸下方，沒有交叉點'
+                                        : `距${spotWord()} ${dist(flip)}`}</div></div>
       <div class="tile"><div class="k">GEX+ Flip</div>
         <div class="v" style="color:var(--flip2)">${fmtP(flipP)}</div>
-        <div class="s">距${spotWord()} ${dist(flipP)}・β=${S.beta.toFixed(1)}</div></div>
+        <div class="s">${flipP == null ? `同上・β=${S.beta.toFixed(1)}`
+                                       : `距${spotWord()} ${dist(flipP)}・β=${S.beta.toFixed(1)}`}</div></div>
       <div class="tile"><div class="k">總 VEX</div>
         <div class="v" style="font-size:17px;color:${totV >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(totV / E)}</div>
         <div class="s">${UNIT} / vol 點（vanna）</div></div>
@@ -641,8 +701,10 @@ function drawSummary(rows, cv, flip, flipP) {
         <span class="chip">Put ${pw ? fmtP(pw.K) : '—'}・${pw ? fmtK(pw.op) : 0} 口</span>
         <span style="color:var(--ink3);font-size:11.5px">P/C = ${(v.oi_p / Math.max(v.oi_c, 1)).toFixed(2)}</span></div>
       <div style="color:var(--ink3);font-size:11.5px;margin-top:6px">
-        ${vTone}。輸出範圍（±${(tr.band_pct * 100).toFixed(0)}%）外還有 ${tr.n_strikes_dropped} 個履約價、${fmtK(tr.oi_outside)} 口未平倉，
-        佔總 GEX ${(Math.abs(gexOf(tr, sg)) / Math.max(Math.abs(totG), 1) * 100).toFixed(2)}%，已計入上方總量。</div>
+        ${vTone}。<br>
+        資料產出時只保留${spotWord()} ±${(tr.band_pct * 100).toFixed(0)}% 內的逐履約價明細（<b>跟上面的「顯示區間」是兩回事，
+        改顯示區間不會改變這一行</b>）；再外面還有 ${tr.n_strikes_dropped} 個履約價、${fmtK(tr.oi_outside)} 口未平倉，
+        佔總 GEX ${(Math.abs(gexOf(tr, sg)) / Math.max(Math.abs(totG), 1) * 100).toFixed(2)}%，<b>已經計入上方所有總量</b>。</div>
     </div>`;
 }
 
@@ -668,8 +730,8 @@ function drawTable(rows) {
     <td style="color:${vexOf(r, sg) >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(vexOf(r, sg) / E, 3)}</td>
     <td style="color:var(--ink2)">${fmt(vegaOf(r, sg) / E, 3)}</td>
     <td>${fmtK(r.oc)}</td><td>${fmtK(r.op)}</td>
-    <td style="color:var(--ink2)">${r.dc >= 0 ? '+' : '−'}${fmtK(Math.abs(r.dc))}</td>
-    <td style="color:var(--ink2)">${r.dp >= 0 ? '+' : '−'}${fmtK(Math.abs(r.dp))}</td>
+    <td style="color:var(--ink2)">${fmtD(r.dc)}</td>
+    <td style="color:var(--ink2)">${fmtD(r.dp)}</td>
     <td>${r.iv == null ? '—' : (r.iv * 100).toFixed(2) + '%'}</td></tr>`).join('');
 }
 
@@ -713,7 +775,8 @@ function render() {
   const lg = (host, items) => { $(host).innerHTML = items.map(a => lgi(a[0], a[1], a[2])).join(''); };
 
   lg('#lgGex', [['var(--pos)', '正 GEX（穩定 / 壓回）'], ['var(--neg)', '負 GEX（放大 / 追價）'],
-                ['var(--spot)', spotWord(), 1], ['var(--flip)', 'Gamma Flip', 1]]);
+                ['var(--spot)', spotWord(), 1],
+                ...(flip == null ? [] : [['var(--flip)', 'Gamma Flip', 1]])]);
   lg('#lgVex', [['var(--neg)', '負 VEX（波動上升 → 造市商賣出 → 放大）'], ['var(--pos)', '正 VEX'],
                 ['var(--spot)', spotWord(), 1]]);
   lg('#lgCurve', [['var(--curve1)', 'GEX'], ['var(--curve2)', `GEX+（β=${S.beta.toFixed(1)}）`],
@@ -727,8 +790,8 @@ function render() {
       tip: (r, v) => `<div class="t">履約價 ${fmtP(r.K)}</div>
         <div class="r"><span>GEX</span><span>${fmt(v)} ${UNIT} / 1%</span></div>
         <div class="r"><span>VEX</span><span>${fmt(vexOf(r, sg) / E, 3)} ${UNIT} / vol 點</span></div>
-        <div class="r"><span>Call OI</span><span>${fmtK(r.oc)}（${r.dc >= 0 ? '+' : '−'}${fmtK(Math.abs(r.dc))}）</span></div>
-        <div class="r"><span>Put OI</span><span>${fmtK(r.op)}（${r.dp >= 0 ? '+' : '−'}${fmtK(Math.abs(r.dp))}）</span></div>
+        <div class="r"><span>Call OI</span><span>${fmtK(r.oc)}（${fmtD(r.dc)}）</span></div>
+        <div class="r"><span>Put OI</span><span>${fmtK(r.op)}（${fmtD(r.dp)}）</span></div>
         <div class="r"><span>隱含波動率</span><span>${r.iv == null ? '—' : (r.iv * 100).toFixed(2) + '%'}</span></div>`,
     });
 
@@ -769,10 +832,44 @@ function segment(host, key, cast, after) {
 }
 
 function methodology() {
-  const m = S.data.meta;
+  const m = S.data.meta, sym = m.symbol;
+  const tw = sym === 'TXO', cme = sym === 'ES', cboe = !tw && !cme;
+  const cur = m.currency || 'NT$';
+  const exch = tw ? '臺灣期貨交易所' : cme ? 'CME' : 'CBOE';
+  const oiPub = tw ? '期交所' : cme ? 'CME' : 'OCC';
+  const cal = tw ? 'calendar_tw.txt' : 'calendar_us.txt';
+  const und = cme ? '主力月 ES 期貨結算價'
+            : tw ? '證交所的發行量加權股價指數收盤'
+                 : 'CBOE 的標的前一交易日收盤價';
+
+  const sigWord = tw ? '期交所公布的是全市場逐履約價的未平倉量'
+                     : `${oiPub} 公布的是全市場逐履約價的未平倉量`;
+
+  const secPrice = tw
+    ? `只取<b>一般交易時段</b>與<b>結算價</b>（大量履約價當天沒有成交，收盤價是空的）。`
+    : cme
+    ? `價格取 CME <b>每日結算表</b>的結算價。未平倉量<b>不是</b>取結算表上那一欄——
+       那一欄是<b>前一交易日</b>的；當日收盤的未平倉在<b>成交量表</b>的 <code>atClose</code>，
+       本站把兩張表按（買/賣權、履約價）合併，並用「前一日 ＋ 當日變動 － 當日收盤 = 0」對帳。
+       日選的兩者差距可以到四成以上，取錯整張圖會偏掉。`
+    : `價格取每個合約的<b>前一交易日收盤價</b>（<code>prev_day_close</code>），標的價同樣取前一交易日收盤。
+       這是刻意的：CBOE 的即時報價是活的，但未平倉量要等 ${oiPub} <b>隔天美東上午</b>才發布，
+       <b>沒有任何一個時點能同時拿到對齊的價格與未平倉</b>。用即時價配昨天的未平倉會得到兩個時點混在一起的圖，
+       Flip 位置會錯。本站寧可整份晚一天，也不混。`;
+
+  const secT = tw
+    ? `臺指選擇權的最終結算價在「最後交易日之<b>次一營業日</b>」開盤後 15 分鐘決定，所以把結算日也算進來，`
+    : `到期時間從資料日算到<b>結算日</b>，`;
+
+  const todo = tw
+    ? '・只做 TXO，沒有納入電子、金融、小型台指選擇權。'
+    : cme
+    ? '・只做 ES，沒有納入 NQ、RTY、CL 等其他 CME 商品。'
+    : '・沒有納入個股選擇權，只做指數與大型 ETF。';
+
   $('#meth').innerHTML = `
   <div class="warn"><b>先講最重要的限制。</b>「造市商曝險」這個名字是慣例，不是觀測。
-  期交所公布的是全市場逐履約價的未平倉量，<b>沒有</b>任何欄位告訴你哪些部位屬於造市商、方向是多還是空。
+  ${sigWord}，<b>沒有</b>任何欄位告訴你哪些部位屬於造市商、方向是多還是空。
   這張圖是在「買權由造市商作多、賣權由造市商放空」這個<b>假設</b>下算出來的，
   跟真實的造市商帳本可能相差很遠。把它當成<b>全市場 gamma / vanna 結構的描述</b>來用是合理的；
   把它當成訊號來下單之前，請自己先做過檢定。</div>
@@ -781,7 +878,7 @@ function methodology() {
   <code>GEX(K) = M × S² × 0.01 × Σ sign × gamma × OI</code>　→　標的每移動 1%，造市商 delta 名目金額的變動量<br>
   <code>VEX(K) = −M × S ÷ 100 × Σ sign × vanna × OI</code>　→　隱含波動率每上升 1 個百分點，造市商 delta 名目金額的變動量<br>
   <code>GEX+ = GEX + β × VEX</code>　→　β 的意思是「標的每移動 1%，隱含波動率反向變動 β 個波動點」<br>
-  <code>M = ${m.multiplier} 元/點</code>（TXO 契約乘數）。sign 由上方「造市商假設」決定，三個式子共用。
+  <code>M = ${cur}${m.multiplier} / 點</code>（${m.label} 契約乘數）。sign 由上方「造市商假設」決定，三個式子共用。
 
   <h3>2. VEX 用 vanna 不用 vega</h3>
   這張圖描述的是造市商<b>被迫調整的避險流量</b>。vega 講的是部位損益（波動率動了賺賠多少），
@@ -792,35 +889,38 @@ function methodology() {
   於是兩側同號、價平附近趨近於零——這就是 VEX 圖中間那個凹陷的來源。
   vega 曝險仍然有意義（造市商是波動率的多方還是空方），放在摘要與資料表裡當附加欄位。
 
-  <h3>3. 參考標的價用加權指數現貨</h3>
-  S 用證交所的發行量加權股價指數收盤，所以 Gamma Flip 講出來直接是現貨價位，跟看盤軟體對得起來。<br>
-  但<b>選擇權定價不用現貨</b>：每個到期別由自己的結算價 put-call parity 反解遠期
-  <code>F = K + (C − P)</code>（價平 ±3% 取中位數）。用現貨當標的會讓 parity 破裂，
-  同一履約價的買權與賣權會反解出不同的隱含波動率。
+  <h3>3. 參考標的價與遠期</h3>
+  摘要卡上的 <b>${spotWord()} S</b> 取的是${und}，所以 Flip 講出來直接是你看盤軟體上的價位。<br>
+  但<b>選擇權定價不用它</b>：每個到期別由自己的${m.price_note} put-call parity 反解遠期
+  <code>F = K + (C − P)</code>（價平 ±3% 取中位數）。${cme
+    ? '期貨選擇權的標的本來就是期貨，反解出來的 F 會很接近該月期貨，這一步主要是吸收各到期別之間的差異。'
+    : '用現貨當標的會讓 parity 破裂，同一履約價的買權與賣權會反解出不同的隱含波動率。'}
   情境曲線平移時，各到期別遠期依 <code>F_e × (S / S₀)</code> 同比例移動，保持基差比例。
 
   <h3>4. 隱含波動率只取價外那一側</h3>
   <code>K &lt; F</code> 用賣權、<code>K ≥ F</code> 用買權反解，再讓同履約價的買賣權共用這個 IV。
-  深度價內的結算價時間價值常常只有一兩點，IV 對它極度敏感，拿來反解會出現假的高波動率。
+  深度價內的${m.price_note}時間價值常常只有一兩點，IV 對它極度敏感，拿來反解會出現假的高波動率。
   反解用二分法保證收斂加牛頓法收尾，不用純割線法（會在深度價內停滯）。
 
   <h3>5. 到期時間 T</h3>
-  臺指選擇權的最終結算價在「最後交易日之次一營業日」開盤後 15 分鐘決定，所以把結算日也算進來，
-  再用 252 個交易日折成年（休市日表在 <code>calendar_tw.txt</code>）。當日到期的契約直接排除。<br>
+  ${secT}再用 252 個交易日折成年（休市日表在 <code>${cal}</code>）。當日到期的契約直接排除。<br>
   <b>T 的慣例對 GEX 幾乎沒有影響</b>：IV 是從價格反解的，<code>σ√T</code> 被市價釘住，
   而 <code>gamma ≈ φ(d₁)/(F·σ√T)</code>，兩邊的 T 互相抵消。VEX 與 vega 曝險則會受影響。
+  ${sym === 'SPX' ? '<br>SPX 與 SPXW 是兩個不同的根（AM / PM 結算），本站拆成獨立的到期別，不合併。' : ''}
 
   <h3>6. 資料與更新</h3>
-  來源：${m.source}。只取<b>一般交易時段</b>與<b>結算價</b>（大量履約價當天沒有成交，收盤價是空的）。
+  來源：${m.source}。${secPrice}<br>
   本日採計 ${fmtK(m.n_legs)} 份契約、${m.n_expiries} 個到期日、${fmtK(m.oi_total)} 口未平倉，
   OI 覆蓋率 ${(m.oi_coverage * 100).toFixed(1)}%（反解不出隱含波動率的會被剔除）。<br>
-  盤中沒有即時未平倉量，期交所的 OI 是盤後才公布，所以這張圖描述的是<b>前一個收盤</b>的結構，
-  不是盤中即時曝險。資料產生時間 ${m.generated_at}。
+  盤中沒有即時未平倉量，${oiPub} 的 OI 是盤後才公布，所以這張圖描述的是<b>收盤</b>的結構，
+  不是盤中即時曝險。${m.tz_note}。資料產生時間 ${m.generated_at}。<br>
+  逐履約價明細只保留${spotWord()} ±${(view().truncated.band_pct * 100).toFixed(0)}% 內的部分，
+  再外面的合併成一筆，但<b>所有總量都是用全部履約價算的</b>。
 
   <h3>7. 已知還沒做的事</h3>
-  ・沒有做流動性加權，冷門履約價的結算價是期交所用模型算的，權重跟熱門履約價一樣。<br>
+  ・沒有做流動性加權，冷門履約價的${m.price_note}是交易所用模型算的，權重跟熱門履約價一樣。<br>
   ・情境曲線假設隱含波動率的水準不隨標的變動（β 只補了一階的線性回饋）。<br>
-  ・只做 TXO，沒有納入電子、金融、小型台指選擇權。
+  ${todo}
   `;
 }
 
@@ -1119,15 +1219,42 @@ function applyFs(v) {
   $('#segSym').addEventListener('pointerover', warm);
   $('#segSym').addEventListener('touchstart', warm, { passive: true });
 
+  $('#symNote').addEventListener('click', ev => {
+    if (ev.target.closest('#symNote').classList.contains('clamped'))
+      $('#symNote').classList.remove('clamped');
+  });
+  $('#btnAdv').addEventListener('click', () => {
+    const on = $('.controls').classList.toggle('adv-on');
+    $('#btnAdv').textContent = on ? '收起設定 ▴' : '更多設定 ▾';
+    $('#btnAdv').setAttribute('aria-expanded', String(on));
+  });
+
   const pref = loadPref();
   applyFs(pref.fs || 1);
   if (pref.cvd === '1') { S.cvd = '1'; document.documentElement.setAttribute('data-cvd', '1'); }
 
-  await switchTo(syms[0].code);
+  const has = c => syms.some(x => x.code === c);
+  const h = readHash();
+  const start = has(h.sym) ? h.sym : (has(pref.sym) ? pref.sym : syms[0].code);
+  try {
+    await switchTo(start, has(h.sym) ? h.day : undefined);
+  } catch (e) {
+    await switchTo(syms[0].code);                  // 網址寫錯就退回預設，不要卡在錯誤畫面
+  }
   [...$('#segCvd').querySelectorAll('button')].forEach(b =>
     b.setAttribute('aria-pressed', b.dataset.v === String(S.cvd)));
 
   $('#selDate').addEventListener('change', e => switchTo(S.sym, e.target.value));
+
+  // 只改 hash 的導覽不會重新載入頁面，要自己接
+  window.addEventListener('hashchange', () => {
+    const h = readHash();
+    if (!h.sym || !$(`#segSym button[data-v="${h.sym}"]`)) return;
+    const sel = $('#selDate');
+    const curDay = getComputedStyle($('#ctlDate')).display === 'none' ? '' : sel.value;
+    if (h.sym === S.sym && (h.day || '') === (sel.selectedIndex === 0 ? '' : curDay)) return;
+    switchTo(h.sym, h.day).catch(() => {});
+  });
   $('#segExp').addEventListener('click', ev => {
     const b = ev.target.closest('button'); if (!b) return;
     [...$('#segExp').querySelectorAll('button')].forEach(x => x.setAttribute('aria-pressed', x === b));

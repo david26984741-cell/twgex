@@ -170,6 +170,19 @@ tbody tr:hover{background:#141d29}
          font-size:calc(12.5px * var(--fs));line-height:1.75;margin-bottom:14px}
 .symnote b{color:#e6f2fa}
 .symnote .sz{color:#7f96a8;display:block;margin-top:4px;font-size:calc(11.5px * var(--fs))}
+#btnAdv{display:none;appearance:none;background:var(--surface2);border:1px solid var(--line);
+  color:var(--ink2);font:inherit;font-size:calc(12px * var(--fs));border-radius:7px;padding:5px 11px;cursor:pointer}
+#btnAdv:hover{color:var(--ink);background:#1b2635}
+@media(max-width:760px){
+  #btnAdv{display:inline-flex;flex:0 0 auto}
+  .controls .ctl.adv{display:none}
+  .controls.adv-on .ctl.adv{display:flex}
+}
+/* 手機上先只露出第一段說明，點一下才展開，讓圖可以早一點出現 */
+.symnote.clamped{position:relative;max-height:calc(58px * var(--fs));overflow:hidden;cursor:pointer}
+.symnote.clamped::after{content:'⋯ 點一下看完整說明';position:absolute;left:0;right:0;bottom:0;
+  padding:14px 14px 5px;font-size:calc(11.5px * var(--fs));color:#8fb3cc;
+  background:linear-gradient(to bottom,rgba(15,26,36,0),#0f1a24 62%)}
 </style>
 </head>
 <body>
@@ -191,7 +204,7 @@ tbody tr:hover{background:#141d29}
     <div class="ctl" id="ctlDate" style="display:none"><label>資料日期</label>
       <select id="selDate"></select></div>
     <div class="ctl"><label>到期別</label><div class="seg" id="segExp"></div>
-      <select id="selExp" style="display:none;max-width:230px"></select></div>
+      <select id="selExp" style="display:none;max-width:300px"></select></div>
     <div class="ctl"><label>顯示區間</label>
       <select id="selBand">
         <option value="0.05">±5%</option>
@@ -205,21 +218,22 @@ tbody tr:hover{background:#141d29}
         <option value="100">100 點</option>
         <option value="200">200 點</option>
       </select></div>
-    <div class="ctl"><label title="GEX、VEX、GEX+ 三者共用同一個造市商方向假設">造市商假設</label>
+    <button id="btnAdv" type="button" aria-expanded="false">更多設定 ▾</button>
+    <div class="ctl adv"><label title="GEX、VEX、GEX+ 三者共用同一個造市商方向假設">造市商假設</label>
       <div class="seg" id="segSign">
         <button data-v="net" aria-pressed="true">買權多・賣權空</button>
         <button data-v="gross">兩邊皆空</button>
       </div></div>
-    <div class="ctl"><label title="標的每移動 1%，隱含波動率反向變動幾個波動點。β=0 時 GEX+ 等於 GEX">β</label>
+    <div class="ctl adv"><label title="標的每移動 1%，隱含波動率反向變動幾個波動點。β=0 時 GEX+ 等於 GEX">β</label>
       <input type="range" id="rngBeta" min="0" max="2" step="0.1" value="1"><span class="val" id="valBeta">1.0</span></div>
-    <div class="ctl"><label>字級</label>
+    <div class="ctl adv"><label>字級</label>
       <div class="seg" id="segFs">
         <button data-v="0.88">小</button>
         <button data-v="1" aria-pressed="true">標準</button>
         <button data-v="1.15">大</button>
         <button data-v="1.32">特大</button>
       </div></div>
-    <div class="ctl"><label>色盲友善</label>
+    <div class="ctl adv"><label>色盲友善</label>
       <div class="seg" id="segCvd">
         <button data-v="0" aria-pressed="true">綠正紅負</button>
         <button data-v="1">藍正橘負</button>
