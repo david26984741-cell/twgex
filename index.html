@@ -168,6 +168,9 @@ tbody tr:hover{background:#141d29}
 }
 #err{display:none;background:#2a1416;border:1px solid #5c2b2f;border-radius:10px;padding:14px 16px;color:#f0c9c9}
 .notice{background:#241c0c;border:1px solid #5c4a1f;border-radius:10px;padding:11px 14px;color:#e8d5a6;font-size:calc(12.5px * var(--fs));line-height:1.7;margin-bottom:14px}
+.notice.stale{background:#2a1416;border-color:#5c2b2f;color:#f0c9c9}
+.notice.stale b{color:#ffdede}
+.notice code{background:#00000055;padding:1px 5px;border-radius:4px}
 .symnote{background:#0f1a24;border:1px solid #24435c;border-radius:10px;padding:11px 14px;color:#b9d4e6;
          font-size:calc(12.5px * var(--fs));line-height:1.75;margin-bottom:14px}
 .symnote b{color:#e6f2fa}
@@ -201,6 +204,7 @@ tbody tr:hover{background:#141d29}
 
   <div id="err"></div>
   <div id="symNote" class="symnote" style="display:none"></div>
+  <div id="staleWarn" class="notice stale" style="display:none"></div>
   <div id="dateWarn" class="notice" style="display:none"></div>
 
   <div class="controls">

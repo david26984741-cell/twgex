@@ -195,6 +195,61 @@ function pickBand(cap) {
   return opts[opts.length - 1];
 }
 
+/* ---------------------------------------------------------- 資料過期偵測
+   ES 是人工抓的、排程也可能整天沒跑，資料會安靜地停在某一天。
+   這裡用休市日表數「資料日之後到今天為止還有幾個交易日」，超過該有的落差就跳提醒。 */
+const CAL = {};
+function loadCal(file) {
+  if (!CAL[file]) {
+    CAL[file] = fetch(file, { cache: 'no-cache' })
+      .then(r => r.ok ? r.text() : '')
+      .then(t => new Set(t.split('\n').map(l => l.trim())
+        .filter(l => l && !l.startsWith('#')).map(l => l.replace(/-/g, '/'))))
+      .catch(() => new Set());
+  }
+  return CAL[file];
+}
+const ymd = d => d.getUTCFullYear() + '/' + String(d.getUTCMonth() + 1).padStart(2, '0')
+              + '/' + String(d.getUTCDate()).padStart(2, '0');
+/* 以某個時區偏移看「今天」是哪一天（回傳一個 UTC 午夜的 Date，方便逐日加減） */
+function todayIn(offsetHours) {
+  const t = new Date(Date.now() + offsetHours * 3600e3);
+  return new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()));
+}
+/* 資料日之後到今天為止（含今天）有幾個交易日 */
+function tradingDaysSince(tradeDate, hol, today) {
+  const [y, m, d] = tradeDate.split('/').map(Number);
+  const cur = new Date(Date.UTC(y, m - 1, d));
+  let n = 0, guard = 0;
+  while (cur < today && guard++ < 400) {
+    cur.setUTCDate(cur.getUTCDate() + 1);
+    const wd = cur.getUTCDay();
+    if (wd !== 0 && wd !== 6 && !hol.has(ymd(cur))) n++;
+  }
+  return n;
+}
+async function staleNotice(meta) {
+  const box = $('#staleWarn');
+  if (!box || !meta.trade_date) return;
+  const tw = meta.symbol === 'TXO';
+  const hol = await loadCal(tw ? 'calendar_tw.txt' : 'calendar_us.txt');
+  // 台指看台北的今天；美股看美東的今天（用 UTC−5 保守估，寧可少報不要誤報）
+  const today = todayIn(tw ? 8 : -5);
+  const n = tradingDaysSince(meta.trade_date, hol, today);
+  // 該有的落差：台指當天更新（跑之前會落後 1 天）；美股本來就是前一個交易日（跑之前落後 2 天）
+  const ok = tw ? 1 : 2;
+  if (n <= ok) { box.style.display = 'none'; return; }
+  const late = n - ok;
+  const how = meta.symbol === 'ES'
+    ? 'ES 要在自己的電腦上用 <code>tools/cme.html</code> 抓（CME 擋伺服器端的 IP），最可能是那班沒跑。'
+    : tw ? '可能是期交所檔案延後上架，或排程沒跑——到 GitHub 的 Actions 手動按一次 Run workflow 就會補。'
+         : '可能是排程沒跑或 CBOE 那邊還沒更新——到 GitHub 的 Actions 手動按一次 Run workflow 就會補。';
+  box.style.display = '';
+  box.innerHTML = `<b>這份資料已經 ${late} 個交易日沒更新。</b>`
+    + `目前顯示的是 <b>${meta.trade_date}</b> 的收盤，`
+    + `照正常節奏現在應該要有更新的資料了。<br>${how}`;
+}
+
 function applyMeta() {
   const m = S.data.meta;
   E = m.unit_div || 1e8;
@@ -233,6 +288,7 @@ function applyMeta() {
         `報價為 <b>${when}</b>。本頁以未平倉日標示，隱含波動率則來自較新的那組報價。` +
         `（OCC 每個營業日早上才發布前一日的未平倉量，排程若在發布前跑就會出現這個情況。）`;
   } else { warn.style.display = 'none'; }
+  staleNotice(m);
   renderSymNote(m.symbol);
   $('#nGex').textContent = UNIT + ' / 標的移動 1%';
   $('#nVex').textContent = 'vanna 曝險・' + UNIT + ' / 波動率 1 點';
