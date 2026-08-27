@@ -35,6 +35,8 @@ h1{font-size:calc(20px * var(--fs));font-weight:600;margin:0;letter-spacing:.02e
   border-radius:7px;padding:4px 11px;color:#a9cdf0;font-size:calc(12px * var(--fs));text-decoration:none;
   white-space:nowrap;line-height:1.4}
 .guidelink:hover{background:#1b2b3d;color:#d6e9fb}
+.guidelink.pri{background:#1c3350;border-color:#3a628c;color:#dcecfb;font-weight:600}
+.guidelink.pri:hover{background:#24425f}
 
 /* ---- 篩選列：一排，在圖表上方 ---- */
 .controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
@@ -191,7 +193,8 @@ tbody tr:hover{background:#141d29}
 
   <header>
     <h1>選擇權曝險地圖</h1>
-    <a class="guidelink" href="guide.html">每個數字怎麼用 →</a>
+    <a class="guidelink pri" href="easy.html">五分鐘看懂 →</a>
+    <a class="guidelink" href="guide.html">每個數字怎麼用</a>
     <div class="sub">交易日 <b id="mDate">—</b> ・ <span id="mSpotK">現貨</span> <b id="mSpot">—</b> ・ <b id="mLegs">—</b> 份契約 ・ <b id="mExp">—</b> 個到期日 ・ 未平倉 <b id="mOI">—</b> 口 ・ OI 覆蓋 <b id="mCov">—</b></div>
   </header>
   <div class="src" id="mSrc">—</div>

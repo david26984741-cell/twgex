@@ -1102,8 +1102,10 @@ function howto() {
   <p style="margin:0 0 12px">這張圖畫的是<b>地形</b>，不是天氣。它告訴你造市商在哪些價位會被迫買、
   在哪些價位會被迫賣，不告訴你價格會往哪邊走。下面五步是<b>使用順序</b>，照著跑一遍再看盤。</p>
   <p style="margin:0 0 14px;padding:9px 12px;background:var(--surface2);border:1px solid #2b4763;border-radius:9px">
+  <b>看不懂這一段？</b>先看 <a href="easy.html" style="color:#a9cdf0">五分鐘看懂這張圖</a>——
+  那一頁用生活上的例子（護欄與結冰、結冰線、水泥牆與影子）把整套講完，不用先懂術語。<br>
   想查<b>單一格</b>的意思——某個數字是什麼、那張圖怎麼讀、某個控制項會改變什麼——
-  看 <a href="guide.html" style="color:#a9cdf0">每個數字怎麼用</a>，那是逐項的字典；這裡是走一遍的順序。</p>
+  看 <a href="guide.html" style="color:#a9cdf0">每個數字怎麼用</a>，那是逐項的字典。</p>
 
   <h3>步驟 1　先看三個總量的「方向」，不是絕對值</h3>
   總 GEX 為正，造市商要逆勢調整，行情傾向被磨在區間裡；為負則要順勢調整，一有變動就被放大。<br>

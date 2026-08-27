@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b1017">
+<title>五分鐘看懂這張圖｜選擇權曝險地圖</title>
+<meta name="description" content="用生活上的例子講清楚曝險地圖在說什麼：護欄與結冰、結冰線、真牆與影子牆、河堤的距離。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230f1620%27/%3E%3Crect x=%275%27 y=%2716%27 width=%274%27 height=%2711%27 fill=%27%23e66767%27/%3E%3Crect x=%2711%27 y=%279%27 width=%274%27 height=%2718%27 fill=%27%23e66767%27/%3E%3Crect x=%2717%27 y=%2713%27 width=%274%27 height=%2714%27 fill=%27%23199e70%27/%3E%3Crect x=%2723%27 y=%275%27 width=%274%27 height=%2722%27 fill=%27%23199e70%27/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#0b1017; --surface:#0f1620; --surface2:#141d29; --grid:#243040; --line:#1c2836;
+  --ink:#e6edf3; --ink2:#9aa7b4; --ink3:#6b7a8a;
+  --pos:#199e70; --neg:#e66767; --spot:#ffffff; --flip:#c98500; --curve2:#9085e9;
+  --fs:1;
+}
+:root[data-cvd="1"]{ --pos:#3987e5; --neg:#d95926; }
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
+  font-size:calc(15px * var(--fs));line-height:1.85;-webkit-font-smoothing:antialiased}
+a{color:#7fb2f0;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:760px;margin:0 auto;padding:18px 22px 72px}
+
+.top{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:space-between;
+  margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.back{display:inline-flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--line);
+  border-radius:8px;padding:6px 12px;color:var(--ink);font-size:calc(13px * var(--fs))}
+.back:hover{background:#1b2635;text-decoration:none}
+.seg{display:flex;background:var(--surface2);border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{appearance:none;background:none;border:0;color:var(--ink2);font:inherit;
+  font-size:calc(12.5px * var(--fs));padding:5px 11px;cursor:pointer;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button:hover{color:var(--ink);background:#1b2635}
+.seg button[aria-pressed="true"]{background:#22304a;color:#fff}
+.ctl{display:flex;align-items:center;gap:7px}
+.ctl>label{color:var(--ink2);font-size:calc(12.5px * var(--fs))}
+
+h1{font-size:calc(26px * var(--fs));font-weight:650;margin:0 0 6px;letter-spacing:.01em;line-height:1.35}
+.lede{color:var(--ink2);font-size:calc(15px * var(--fs));margin:0 0 8px}
+.lede b{color:var(--ink)}
+
+/* 先給結論 */
+.tldr{background:var(--surface);border:1px solid #2b4763;border-radius:12px;padding:14px 16px;margin:18px 0 8px}
+.tldr h2{font-size:calc(14px * var(--fs));margin:0 0 8px;color:#a9cdf0;font-weight:600}
+.tldr ol{margin:0;padding-left:20px}
+.tldr li{margin-bottom:6px;color:var(--ink)}
+.tldr li:last-child{margin-bottom:0}
+
+/* 每一段 */
+.step{margin-top:34px;padding-top:22px;border-top:1px solid var(--line)}
+.step:first-of-type{border-top:0}
+.step .no{display:inline-flex;align-items:center;justify-content:center;
+  width:calc(26px * var(--fs));height:calc(26px * var(--fs));border-radius:50%;
+  background:var(--flip);color:#160f00;font-weight:700;font-size:calc(14px * var(--fs));margin-right:9px}
+.step h2{font-size:calc(20px * var(--fs));font-weight:650;margin:0 0 10px;line-height:1.45;
+  display:flex;align-items:baseline}
+.step h2 span{flex:1 1 auto;min-width:0}
+.step p{margin:0 0 12px}
+.step b{color:var(--ink)}
+.q{color:var(--ink2)}
+
+/* 比喻框 */
+.meta{background:var(--surface);border-left:3px solid var(--curve2);border-radius:0 10px 10px 0;
+  padding:12px 15px;margin:14px 0}
+.meta .k{font-size:calc(12px * var(--fs));color:var(--curve2);font-weight:600;margin-bottom:3px}
+.meta p{margin:0;color:var(--ink)}
+
+/* 實際數字 */
+.real{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:14px 0}
+.real .k{font-size:calc(12px * var(--fs));color:var(--ink3);margin-bottom:4px}
+.real p{margin:0}
+.real .n{font-variant-numeric:tabular-nums;color:var(--ink);font-weight:600}
+
+/* 所以怎麼做 */
+.do{background:#141f18;border:1px solid #24503c;border-radius:10px;padding:12px 15px;margin:14px 0}
+:root[data-cvd="1"] .do{background:#111d2b;border-color:#25476b}
+.do .k{font-size:calc(12px * var(--fs));color:var(--pos);font-weight:600;margin-bottom:4px}
+.do p,.do ul{margin:0}
+.do ul{padding-left:19px}
+.do li{margin-bottom:4px}
+.do li:last-child{margin-bottom:0}
+
+/* 圖 */
+figure{margin:16px 0 6px}
+figure svg{display:block;width:100%;max-width:calc(560px * var(--fs));height:auto;
+  background:var(--surface2);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+figcaption{font-size:calc(12.5px * var(--fs));color:var(--ink3);line-height:1.8;margin-top:8px}
+figcaption b{color:var(--ink2)}
+
+.chip{display:inline-block;font-size:calc(12px * var(--fs));color:var(--ink2);background:var(--surface2);
+  border:1px solid var(--line);border-radius:5px;padding:1px 7px;white-space:nowrap}
+
+.foot{margin-top:38px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink3);
+  font-size:calc(12.5px * var(--fs));line-height:1.9}
+.next{display:block;background:var(--surface);border:1px solid #2b4763;border-radius:12px;
+  padding:14px 16px;margin-top:26px;color:var(--ink)}
+.next:hover{background:#152233;text-decoration:none}
+.next b{display:block;color:#a9cdf0;font-size:calc(15px * var(--fs));margin-bottom:3px}
+.next span{color:var(--ink2);font-size:calc(13px * var(--fs))}
+@media(max-width:760px){
+  .wrap{padding:14px calc(14px + env(safe-area-inset-right)) 56px calc(14px + env(safe-area-inset-left))}
+  h1{font-size:calc(23px * var(--fs))}
+  .step h2{font-size:calc(18px * var(--fs))}
+  figure svg{padding:8px 8px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="top">
+  <a class="back" href="index.html">← 回曝險地圖</a>
+  <div class="ctl"><label>字級</label>
+    <div class="seg" id="segFs">
+      <button data-v="0.88">小</button>
+      <button data-v="1" aria-pressed="true">標準</button>
+      <button data-v="1.15">大</button>
+      <button data-v="1.32">特大</button>
+    </div>
+  </div>
+</div>
+
+<h1>五分鐘看懂這張圖</h1>
+<p class="lede">出門前看路況，不是為了預測你今天會開去哪，是為了知道<b>路上有沒有結冰、有沒有護欄</b>。<br>
+這張圖就是選擇權市場的路況圖。它不告訴你明天漲還是跌，它告訴你——<b>如果往那邊走，路好不好走。</b></p>
+
+<div class="tldr">
+  <h2>整頁只要記住三句話</h2>
+  <ol>
+    <li>它<b>不預測方向</b>，它講的是「動起來會被壓住還是被放大」。</li>
+    <li>一個數字沒有意義，<b>要跟前幾天比</b>。</li>
+    <li>用途只有一個：決定你今天<b>下多大、停損放多寬</b>。</li>
+  </ol>
+</div>
+
+<section class="step" id="s1">
+  <h2><i class="no">1</i><span>這些數字是誰弄出來的？</span></h2>
+
+  <div class="meta">
+    <div class="k">先講個生活上的例子</div>
+    <p>你跟保險公司買了一張「颱風把屋頂掀了就賠 100 萬」的保單。<br>
+    保險公司<b>不想跟你賭天氣</b>，所以他收了你的錢之後，會馬上去做別的動作把風險抵掉——
+    颱風越靠近，他抵得越多；颱風轉向了，他就抵回去一些。</p>
+  </div>
+
+  <p>選擇權市場一模一樣。賣選擇權給你的那群人（造市商）不賭方向，他們靠<b>一直在期貨上買進賣出</b>來把風險軋平。
+  指數每動一點，他們手上的風險就變了，就得再去下單。</p>
+
+  <p><b>整張圖在算的就是這件事：指數動 1%，這群人被迫要買賣多少錢的部位。</b>
+  這些不是猜測，是真的會出現在盤面上的單子。</p>
+
+  <figure id="f1"></figure>
+</section>
+
+<section class="step" id="s2">
+  <h2><i class="no">2</i><span>今天這條路，有護欄還是結冰？</span></h2>
+
+  <div class="meta">
+    <div class="k">生活上的例子</div>
+    <p><b>有護欄的路</b>：車子偏出去一點，護欄把你彈回來，開起來就是一直在車道裡晃。<br>
+    <b>結冰的下坡</b>：車子偏一點就滑，滑起來就停不下來，越滑越快。</p>
+  </div>
+
+  <p>這兩種路面，在圖上就是同一個數字的正負，網頁上寫 <span class="chip">總 GEX</span>：</p>
+
+  <p><b>正的（有護欄）</b>：指數漲，那群人被迫賣；指數跌，他們被迫買。
+  他們的動作永遠跟行情反著來，等於一路幫你踩煞車，盤就會被磨在一個區間裡。</p>
+
+  <p><b>負的（結冰）</b>：反過來。指數漲，他們要追買；跌，他們要追賣。
+  一有動靜就被放大，容易一路噴出去或殺下去。</p>
+
+  <figure id="f2"></figure>
+
+  <div class="real">
+    <div class="k">實際的例子（2026/08/26 台指）</div>
+    <p>那天 <span class="chip">總 GEX</span> 是 <span class="n">＋18.16 億</span>，正的——這天是<b>有護欄的路</b>。
+    意思是：指數每動 1%，那群人要反向調整大約 18 億的部位，把價格往回拉。</p>
+  </div>
+
+  <div class="do">
+    <div class="k">所以今天怎麼做</div>
+    <ul>
+      <li><b>正的、而且數字厚</b>：突破容易是假的，區間來回比較好做。</li>
+      <li><b>負的</b>：部位縮小、停損放寬，順著走比逆著做好。</li>
+    </ul>
+  </div>
+</section>
+
+<section class="step" id="s3">
+  <h2><i class="no">3</i><span>結冰線在哪裡？離我還有多遠？</span></h2>
+
+  <div class="meta">
+    <div class="k">生活上的例子</div>
+    <p>開山路的時候，海拔到某個高度以上就會結冰。<b>那條高度線</b>就是結冰線。<br>
+    你現在在線的下面，路是乾的；一旦爬過那條線，路面就換一種，開法也得換。</p>
+  </div>
+
+  <p>指數也有這麼一條線，網頁上叫 <span class="chip">Gamma Flip</span>。
+  現貨在它<b>上面</b>，是有護欄的世界；<b>掉到它下面</b>，就進入結冰的世界。</p>
+
+  <p>真正要看的不是那條線的數字，是<b>「現在離它還有多遠」</b>——那一格寫「距現貨 −1.59%」的就是。</p>
+
+  <figure id="f3"></figure>
+
+  <div class="real">
+    <div class="k">實際的例子（2026/08/26 台指）</div>
+    <p>現貨 <span class="n">45,833</span>，結冰線在 <span class="n">45,106</span>，距離 <span class="n">−1.59%</span>。<br>
+    白話講：<b>再跌 727 點，路面就換一種了。</b></p>
+  </div>
+
+  <div class="do">
+    <div class="k">所以今天怎麼做</div>
+    <ul>
+      <li>距離 <b>3~4% 以上</b>：結構上還有餘裕，可以照平常做。</li>
+      <li>距離 <b>1~2% 以內</b>：一根長黑就過去了，隔天的振幅預期要往上調。</li>
+      <li>已經在線下面：<b>不要再用區間思維交易。</b></li>
+    </ul>
+  </div>
+</section>
+
+<section class="step" id="s4">
+  <h2><i class="no">4</i><span>哪裡會卡住、哪裡會滑下去？</span></h2>
+
+  <p>圖上有兩排價位，網頁寫 <span class="chip">正 GEX 集中</span> 跟 <span class="chip">負 GEX 集中</span>。
+  講白話就是<b>減速丘</b>跟<b>坑洞</b>：上面那幾個價位，衝上去容易被壓回來；下面那幾個，掉進去容易加速。</p>
+
+  <div class="meta">
+    <div class="k">但這裡有一個陷阱</div>
+    <p>牆有兩種。一種是<b>水泥牆</b>，蓋在那裡就不會動，你走到哪它都在原地。<br>
+    另一種是<b>你自己的影子</b>——看起來也是黑黑一塊擋在前面，可是你往前走，它就往前移。</p>
+  </div>
+
+  <p>圖上「貼著現價那一根」常常就是影子：它排名高，純粹是因為它離現價最近，
+  <b>明天現價換位置，它就跟著換位置</b>，一點支撐壓力的意義都沒有。</p>
+
+  <p>怎麼分？看那個價位上<b>到底壓了多少口單子</b>。口數多的是水泥牆，口數少的是影子。
+  網頁最下面「資料表（逐履約價）」打開就查得到。</p>
+
+  <figure id="f4"></figure>
+
+  <div class="real">
+    <div class="k">實際的例子（2026/08/26 台指）</div>
+    <p>上面的牆在 <span class="n">46,000</span> 跟 <span class="n">48,000</span>，下面的坑在
+    <span class="n">45,000</span> 跟 <span class="n">44,000</span>。<br>
+    現貨 45,833 就夾在 45,000 的坑跟 46,000 的牆中間——<b>這一天的預設活動範圍，就是這一段。</b></p>
+  </div>
+</section>
+
+<section class="step" id="s5">
+  <h2><i class="no">5</i><span>今天這個數字，其實一點意義都沒有</span></h2>
+
+  <div class="meta">
+    <div class="k">生活上的例子</div>
+    <p>你早上量體重，<b>70 公斤</b>。這個數字告訴你什麼？什麼都沒有。<br>
+    但如果你知道這五天是 <b>75 → 74 → 72 → 71 → 70</b>，那就有話講了。</p>
+  </div>
+
+  <p>總 GEX、總 VEX 這些數字完全一樣。今天 18 億是多還是少？沒有標準答案。
+  <b>要跟這一檔自己的前幾天比。</b></p>
+
+  <p>網頁左上角有「資料日期」可以往回切。往回切三到五天，每天只要記四個數字：
+  <b>現貨、總 GEX、總 VEX、Gamma Flip</b>。</p>
+
+  <figure id="f5"></figure>
+
+  <div class="do">
+    <div class="k">要警戒的訊號</div>
+    <p>就算今天三個數字都還沒跨過零、看起來「還好」，只要它們<b>一起往同一個方向走</b>——
+    正的一路變薄、負的一路變厚——那就是<b>這面牆正在被拆</b>。只看今天你絕對看不出來。</p>
+  </div>
+</section>
+
+<section class="step" id="s6">
+  <h2><i class="no">6</i><span>最容易搞錯的一件事</span></h2>
+
+  <p>第 3 段講的「離結冰線還有多遠」，這個距離變遠了，是好事嗎？<br>
+  <b>要看它是怎麼變遠的。有兩種，賠率完全不同。</b></p>
+
+  <div class="meta">
+    <div class="k">生活上的例子：你家離河堤有多遠</div>
+    <p><b>情況 A</b>：河堤一步都沒動，是<b>你把房子往山上搬了 1,700 公尺</b>。<br>
+    看起來安全多了，但哪天你搬回原地，河堤還在那裡等你，一點都沒少。</p>
+    <p style="margin-top:8px"><b>情況 B</b>：你家沒搬，是<b>政府把河堤往外推、加高了 1,700 公尺</b>。<br>
+    這才是真的多出來一層保護。</p>
+  </div>
+
+  <p>問題在於：<b>今天打開網頁，兩種情況長得一模一樣</b>——都寫著「距離 1,700 公尺」。
+  摘要卡上就只有這一格，你分不出來。</p>
+
+  <p>要分辨只有一個方法：把前幾天調出來，看是<b>誰在動</b>。
+  是現貨自己跑掉了（A），還是那條線自己退開了（B）。</p>
+
+  <figure id="f6"></figure>
+
+  <div class="do">
+    <div class="k">為什麼這件事值錢</div>
+    <p>A 那種安全是<b>借來的</b>，隨時要還。B 那種安全是<b>真的</b>，是有人在下面補了單子撐出來的。
+    很多人看到「距離拉開了」就放心加碼，結果碰到的是 A。</p>
+  </div>
+</section>
+
+<section class="step" id="s7">
+  <h2><i class="no">7</i><span>那到底要拿它來做什麼？</span></h2>
+
+  <p><b>它不告訴你要買還是要賣。</b>方向要從別的地方來——技術面、基本面、消息面，你原本怎麼判斷還是怎麼判斷。</p>
+
+  <p>這張圖只回答一個問題：<b>在那個方向上走，路面是被鋪平的還是有坑。</b>
+  然後你用這個答案去調整<b>今天下多大、停損放多寬</b>。就這樣，沒有別的用途。</p>
+
+  <figure id="f7"></figure>
+
+  <div class="do">
+    <div class="k">三句話就講完了</div>
+    <ul>
+      <li>正 GEX 又厚 → 突破打折，區間來回比較好做。</li>
+      <li>負 GEX → 部位縮小、停損放寬，順勢比逆勢好做。</li>
+      <li>快碰到結冰線 → 隔天的振幅預期往上調。</li>
+    </ul>
+  </div>
+
+  <div class="meta" style="border-left-color:var(--neg)">
+    <div class="k" style="color:var(--neg)">這四種日子，這張圖不要看</div>
+    <p><b>一、財報或 FOMC 這種大事件</b>——事件本身的振幅比整張地圖還寬，牆跟坑就不再是路障，只是路標，價格會直接穿過去。<br>
+    <b>二、結算日當天跟隔天</b>——撐著這張圖的那批單子正在消失。<br>
+    <b>三、「OI 覆蓋」那個數字掉到 80% 以下的那天</b>——資料本身不完整。<br>
+    <b>四、盤中已經走了一大段</b>——這張圖是昨天收盤的快照，跌了 2% 之後，上面寫的「距離還有 3%」實際上只剩 1%。</p>
+  </div>
+</section>
+
+<a class="next" href="guide.html">
+  <b>想查某一個數字是什麼意思 →</b>
+  <span>「每個數字怎麼用」是逐項的字典，畫面上 36 個地方一個一個講，每則也都配一張圖。</span>
+</a>
+
+<div class="foot">
+  這一頁講的是怎麼讀，不是投資建議。這張圖描述的是選擇權部位留下來的結構，<b>不是訊號</b>；
+  有坑不代表會跌，只代表跌下去的時候沒有人幫你踩煞車。<br>
+  資料每個交易日盤後更新，台指是當天收盤、美股四檔是前一個美股交易日收盤。<br>
+  投資有風險，請自行評估並承擔。
+</div>
+
+</div>
+<script src="easy-figs.js"></script>
+<script>
+(function () {
+  var PREF = 'gexmap.pref';
+  function load() { try { return JSON.parse(localStorage.getItem(PREF) || '{}'); } catch (e) { return {}; } }
+  function save(p) { try { localStorage.setItem(PREF, JSON.stringify(p)); } catch (e) {} }
+  var seg = document.getElementById('segFs');
+  function applyFs(v) {
+    document.documentElement.style.setProperty('--fs', String(v));
+    [].forEach.call(seg.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', Math.abs(parseFloat(b.dataset.v) - v) < 1e-9);
+    });
+  }
+  var pref = load();
+  applyFs(pref.fs || 1);
+  if (pref.cvd === '1') document.documentElement.setAttribute('data-cvd', '1');
+  seg.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button'); if (!b) return;
+    var v = parseFloat(b.dataset.v); applyFs(v);
+    var p = load(); p.fs = v; save(p);
+  });
+
+  var F = window.EASY_FIGS || {};
+  Object.keys(F).forEach(function (id) {
+    var host = document.getElementById(id); if (!host) return;
+    var f = F[id]();
+    host.innerHTML = F.__svg(f.h, f.body) + (f.cap ? '<figcaption>' + f.cap + '</figcaption>' : '');
+  });
+})();
+</script>
+</body>
+</html>
