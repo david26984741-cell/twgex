@@ -113,6 +113,38 @@ def oi_as_of(payload: dict, today: str, prev_td=None) -> Optional[str]:
     return d0.strftime("%Y%m%d")
 
 
+def snapshot_state(payload: dict) -> dict:
+    """判斷這份檔案是「盤中／盤後抓的」還是「隔天開盤前抓的」。
+
+    為什麼要分：檔案裡的 `prev_day_close` 是相對於**當下那一天**的前一個收盤，
+    但 `last_trade_time` 要等新場次真的開始才會跳。兩者換日的時點不一樣，
+    所以在「新的一天、還沒開盤」這個空窗裡：
+
+        last_trade_time = D 16:00      → 程式會以為價格是 prev(D)
+        prev_day_close  = 已經是 D 收盤 → 實際上價格是 D
+
+    差一天。踩到的話會產出「D 的價格 ＋ D-1 的未平倉」而且標成 D-1，
+    連對齊檢查都騙過去（兩個日期都是從 last_trade_time 推的，當然一致）。
+
+    回傳 sess（last_trade_time 那天）、us_date（抓檔當下的美東日期）、
+    opened（抓檔時那個場次是否已經開盤）、rolled（是否落在上述空窗）。
+    """
+    d = payload.get("data") or {}
+    sess = (d.get("last_trade_time") or "")[:10].replace("-", "")
+    stamp = payload.get("timestamp") or ""          # 'YYYY-MM-DD HH:MM:SS'，UTC
+    us_date = ""
+    try:
+        t = dt.datetime.strptime(stamp[:19], "%Y-%m-%d %H:%M:%S") - dt.timedelta(hours=5)
+        us_date = t.strftime("%Y%m%d")
+    except (ValueError, TypeError):
+        pass
+    lt = (d.get("last_trade_time") or "")[11:16]     # 'HH:MM'
+    opened = bool(lt) and lt >= "09:30"
+    return {"sess": sess, "us_date": us_date, "last_trade_hhmm": lt,
+            "opened": opened,
+            "rolled": bool(sess and us_date and us_date > sess)}
+
+
 def parse_chain(payload: dict, trade_day: Optional[str] = None,
                 am_roots: tuple = (), prev_td=None,
                 use_prev_close: bool = False) -> Tuple[Dict[str, dict], dict]:

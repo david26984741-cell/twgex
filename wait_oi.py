@@ -44,15 +44,22 @@ def main() -> int:
         n += 1
         try:
             payload = cboe.fetch_json(a.symbol)
-            sess = (payload.get("data", {}).get("last_trade_time") or "")[:10].replace("-", "")
+            st = cboe.snapshot_state(payload)
+            sess = st["sess"]
             want = prev(dt.date(int(sess[:4]), int(sess[4:6]), int(sess[6:8]))).strftime("%Y%m%d")
             got = cboe.oi_as_of(payload, sess, prev_td=prev)
             stamp = dt.datetime.utcnow().strftime("%H:%M")
-            if got == want:
+            if st["rolled"]:
+                # 新的一天、還沒開盤：prev_day_close 已經滾到 sess 收盤，未平倉卻還沒更新。
+                # 這時 got == want 會成立但意義是錯的，不能放行。
+                print(f"[{stamp}] 第 {n} 次：{st['us_date']} 美東還沒開盤（場次仍是 {sess}），"
+                      f"價格已經滾到新的一天、未平倉還沒跟上，繼續等", file=sys.stderr)
+            elif got == want:
                 print(f"[{stamp}] 第 {n} 次：未平倉已更新到 {want} 收盤（本場次 {sess}），可以開始建圖。")
                 return 0
-            print(f"[{stamp}] 第 {n} 次：未平倉還停在 {got}，要等到 {want}（本場次 {sess}）",
-                  file=sys.stderr)
+            else:
+                print(f"[{stamp}] 第 {n} 次：未平倉還停在 {got}，要等到 {want}（本場次 {sess}）",
+                      file=sys.stderr)
         except Exception as e:                             # noqa: BLE001
             print(f"  讀取失敗，稍後再試：{e}", file=sys.stderr)
         if time.time() + a.every * 60 > deadline:

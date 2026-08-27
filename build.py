@@ -194,11 +194,21 @@ def load_us(args, sym):
     # 所以價格一律取每一檔的 prev_day_close（前一交易日收盤），這樣只要在
     # 「未平倉更新後、當日收盤前」抓一次，價格與未平倉就是同一天的，也不怕排程延遲。
     use_prev = not args.live_price
-    sess = (payload.get("data", {}).get("last_trade_time") or "")[:10].replace("-", "")
+    st = cboe.snapshot_state(payload)
+    sess = st["sess"]
     price_day = sess
     if use_prev and sess:
         y, m, dd = int(sess[:4]), int(sess[4:6]), int(sess[6:8])
-        price_day = prev(dt.date(y, m, dd)).strftime("%Y%m%d")
+        # prev_day_close 是相對「抓檔當下那天」的前一個收盤，不是相對 last_trade_time。
+        # 落在「新的一天、還沒開盤」的空窗時，它已經滾到 sess 當天收盤了。
+        price_day = sess if st["rolled"] else prev(dt.date(y, m, dd)).strftime("%Y%m%d")
+    if use_prev and st["rolled"] and not args.allow_stale_oi:
+        raise SystemExit(
+            f"  {sym}: 這份檔案是在 {st['us_date']}（美東）開盤前抓的，"
+            f"但場次還停在 {sess}。\n"
+            f"    這個空窗裡 prev_day_close 已經滾到 {sess} 收盤、未平倉卻還沒更新，"
+            f"照抓會產出「新價格 ＋ 舊未平倉」而且日期會標錯一天。\n"
+            f"    等美東開盤（且 OCC 發布未平倉）之後再跑。")
     oi_day = cboe.oi_as_of(payload, sess or session or "99999999", prev_td=prev)
     forced = oi_day or price_day or session
     chain_all, meta = cboe.parse_chain(
@@ -270,10 +280,35 @@ def load_cme(args, sym):
              "n_requests": meta.get("n_requests"),
              "oi_asof": meta.get("oi_asof"), "oi_report": meta.get("oi_report"),
              "futures": (meta.get("futures") or [])[:6]}
-    if meta.get("oi_asof") == "prev":
-        print(f"  警告：這批未平倉是「前一個交易日」的（成交量表沒併進來），"
-              f"日選會嚴重低估。", file=sys.stderr)
+    _cme_oi_guard(args, meta)
     return day, chain, prev_oi, args.spot or meta.get("spot"), prior, extra
+
+
+def _cme_oi_guard(args, meta) -> None:
+    """成交量表還沒發布時，收集器會悄悄退回結算表的『前一日』未平倉。
+
+    這件事對帳式抓不到（前一日 ＋ 0 － 前一日 ＝ 0，recon 一樣是 0），
+    只有部分系列退回時 oi_asof 還會是 close，等於完全沒有警訊。
+    所以在這裡擋：退回的系列只要占到總未平倉 1% 以上就直接不產出。
+    """
+    fb_n = int(meta.get("oi_fellback") or 0)
+    fb_oi = int(meta.get("oi_fellback_oi") or 0)
+    oi_tot = int(meta.get("oi_total") or 0)
+    codes = meta.get("oi_fellback_codes") or []
+    if meta.get("oi_asof") == "prev":
+        raise SystemExit(
+            "  未平倉整批退回「前一個交易日」（成交量表一個都沒併進來）。"
+            "這通常表示抓太早、CME 當日的量／未平倉報表還沒發布。不產出。")
+    if not fb_n:
+        return
+    share = (fb_oi / oi_tot) if oi_tot else 1.0
+    who = "、".join(str(c) for c in codes[:6]) + ("…" if len(codes) > 6 else "")
+    line = (f"  {fb_n} 個系列的未平倉退回前一日（{who}），"
+            f"占總未平倉 {share:.2%}（{fb_oi:,} / {oi_tot:,} 口）")
+    if share >= 0.01 and not args.allow_stale_oi:
+        raise SystemExit(line + "\n  超過 1%，不產出。確定要照抓請加 --allow-stale-oi。")
+    tail = "，已指定 --allow-stale-oi，照樣產出。" if share >= 0.01 else "，占比很小，照樣產出。"
+    print(line + tail, file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- 主流程
@@ -288,7 +323,7 @@ def main() -> int:
     ap.add_argument("--live-price", action="store_true",
                     help="美股：用當下的買賣中價而不是前一交易日收盤（只適合盤中看即時結構）")
     ap.add_argument("--allow-stale-oi", action="store_true",
-                    help="美股：即使未平倉與價格不同日也照樣產出")
+                    help="美股：未平倉與價格不同日也照樣產出；ES：未平倉退回前一日也照樣產出")
     args = ap.parse_args()
 
     sym = args.symbol

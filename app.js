@@ -8,6 +8,12 @@ let UNIT = '億元';
 const $ = (s) => document.querySelector(s);
 const fmt = (v, d = 2) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
 const fmtK = (v) => v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+/* KPI 磚用：上千就進位成整數並加千分位，不然一格塞不下也不好認 */
+const fmtBig = (v) => Math.abs(v) >= 1000
+  ? (v >= 0 ? '+' : '−') + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
+  : fmt(v);
+const SHORT_UNIT = { '百萬美元': 'US$M', '億元': '億' };
+const shortUnit = () => SHORT_UNIT[UNIT] || UNIT;
 /* 未平倉增減：算不出來時是 null（例如選了單一到期別，而前一日只留下逐履約價合計） */
 const fmtD = (v) => v == null ? '—' : (v >= 0 ? '+' : '−') + fmtK(Math.abs(v));
 // 價格 / 履約價：台指是四五位數整數，美股是三位數帶小數，小數位要跟著量級走
@@ -167,13 +173,27 @@ const SYM_NOTES = {
   },
 };
 
+/* 標的說明不再佔畫面，改成標題旁邊那個 ⓘ 點開才看。 */
+let SYM_HELP = '';
 function renderSymNote(sym) {
-  const n = SYM_NOTES[sym], box = $('#symNote');
-  if (!n) { box.style.display = 'none'; return; }
-  box.style.display = '';
-  box.innerHTML = n.what + (n.more ? '　' + n.more : '')
-    + (n.size ? `<span class="sz">${n.size}</span>` : '');
-  box.classList.toggle('clamped', isNarrow());     // 手機先摺起來，讓圖早一點出現
+  const n = SYM_NOTES[sym], m = S.data && S.data.meta;
+  SYM_HELP = !n ? '' : (n.what + (n.more ? '　' + n.more : '')
+    + (n.size ? `<div style="color:var(--ink3);margin-top:6px">${n.size}</div>` : ''));
+  if (m) SYM_HELP += `<div style="color:var(--ink3);margin-top:8px;border-top:1px solid #22303f;padding-top:7px">`
+    + `${m.source}<br>${m.price_note}<br>產生於 ${m.generated_at}`
+    + (m.prev_trade_date ? `<br>OI 增減對比 ${m.prev_trade_date}` : '') + `</div>`;
+}
+
+/* 卡片右上角那幾顆膠囊。單位固定、顯示區間會變，所以每次重畫都叫一次。 */
+function pills() {
+  const m = S.data && S.data.meta; if (!m) return;
+  const band = (S.band * 100).toFixed(0);
+  // 單位已經畫在圖裡的軸標題上了，膠囊不要再重複一次
+  $('#nGex').textContent = `圖表顯示${spotWord()} ±${band}%`;
+  $('#nVex').textContent = '負值代表波動放大情境';
+  $('#nCurve').textContent = `Sticky IV　·　β = ${S.beta.toFixed(1)}`;
+  $('#nSum').textContent = (S.exp === 'ALL' ? '' : S.exp + '　·　')
+    + `${fmtK(m.n_legs)} 份契約　·　${m.n_expiries} 個到期日`;
 }
 
 /* 預設顯示區間：±20% 常常把 8~9 成的曝險擠在中間三分之一，兩側全是幾乎為零的長條。
@@ -260,15 +280,10 @@ function applyMeta() {
     Math.abs(parseFloat(o.value) - want) < Math.abs(parseFloat(a.value) - want) ? o : a);
   sb.value = opt.value; S.band = parseFloat(opt.value);
   mountBuckets();
-  $('#mDate').textContent = m.trade_date;
-  $('#mSpot').textContent = fmtP(m.s_ref);
-  $('#mSpotK').textContent = m.s_label || '現貨';
-  $('#mLegs').textContent = fmtK(m.n_legs);
-  $('#mExp').textContent = m.n_expiries;
-  $('#mOI').textContent = fmtK(m.oi_total);
-  $('#mCov').textContent = (m.oi_coverage * 100).toFixed(1) + '%';
-  $('#mSrc').textContent = m.source + '　・　' + m.price_note + '　・　產生於 ' + m.generated_at +
-    (m.prev_trade_date ? '　・　OI 增減對比 ' + m.prev_trade_date : '');
+  $('#symTitle').textContent = m.label;
+  $('#mSubline').innerHTML = `<b>${m.trade_date}</b> 收盤`;
+  $('#hGex').textContent = m.label + ' 各履約價 GEX';
+  $('#hVex').textContent = m.label + ' 各履約價 VEX';
   // 未平倉日與報價日不一致時要講出來（美股常見：OCC 隔一個營業日才發布未平倉量）
   const warn = $('#dateWarn');
   if (m.oi_as_of && m.price_as_of && m.oi_as_of !== m.price_as_of) {
@@ -290,8 +305,7 @@ function applyMeta() {
   } else { warn.style.display = 'none'; }
   staleNotice(m);
   renderSymNote(m.symbol);
-  $('#nGex').textContent = UNIT + ' / 標的移動 1%';
-  $('#nVex').textContent = 'vanna 曝險・' + UNIT + ' / 波動率 1 點';
+  pills();
   document.title = `${m.label} 選擇權曝險地圖`;
   [...document.querySelectorAll('#segSym button')].forEach(b =>
     b.setAttribute('aria-pressed', b.dataset.v === S.sym));
@@ -721,33 +735,31 @@ function drawSummary(rows, cv, flip, flipP) {
     : '正 — 隱含波動率上升時造市商需買進標的，會壓抑行情';
   const dist = (x) => x == null ? '—' : ((x / S0 - 1) * 100).toFixed(2) + '%';
 
-  $('#nSum').textContent = S.exp === 'ALL' ? '全到期別合計' : S.exp;
+  pills();
+
+  /* 六個 KPI 磚：現貨 / Gamma Flip / GEX+ Flip / 總 GEX / 總 VEX / 總 GEX+ */
+  const col = x => x >= 0 ? 'var(--pos)' : 'var(--neg)';
+  const iq = k => `<button class="iq" type="button" data-help="${k}" aria-expanded="false" aria-label="說明">i</button>`;
+  $('#kpis').innerHTML = `
+    <div class="kpi"><div class="k">${spotWord()} S ${iq('k-spot')}</div>
+      <div class="v">${fmtP(S0)}</div><div class="s">${meta.s_ref_source}</div></div>
+    <div class="kpi"><div class="k">Gamma Flip ${iq('k-flip')}</div>
+      <div class="v" style="color:var(--flip)">${fmtP(flip)}</div>
+      <div class="s">${flip == null ? '整條曲線都在零軸下方，沒有交叉點' : `距${spotWord()} ${dist(flip)}`}</div></div>
+    <div class="kpi"><div class="k">GEX+ Flip ${iq('k-flipp')}</div>
+      <div class="v" style="color:var(--flip2)">${fmtP(flipP)}</div>
+      <div class="s">${flipP == null ? `同上・β=${S.beta.toFixed(1)}` : `距${spotWord()} ${dist(flipP)}・β=${S.beta.toFixed(1)}`}</div></div>
+    <div class="kpi"><div class="k">總 GEX ${iq('k-gex')}</div>
+      <div class="v" style="color:${col(totG)}">${fmtBig(totG / E)}<small>${shortUnit()}</small></div>
+      <div class="s">每 1% 變動情境</div></div>
+    <div class="kpi"><div class="k">總 VEX ${iq('k-vex')}</div>
+      <div class="v" style="color:${col(totV)}">${fmtBig(totV / E)}<small>${shortUnit()}</small></div>
+      <div class="s">每 1 vol point 情境</div></div>
+    <div class="kpi"><div class="k">總 GEX+ ${iq('k-gexp')}</div>
+      <div class="v" style="color:${col(totGp)}">${fmtBig(totGp / E)}<small>${shortUnit()}</small></div>
+      <div class="s">β = ${S.beta.toFixed(1)}</div></div>`;
+
   $('#summary').innerHTML = `
-    <div class="hero">
-      <div class="k">總 GEX（${S.sign === 'net' ? '買權多・賣權空' : '兩邊皆空'}）</div>
-      <div class="v" style="color:${totG >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(totG / E)} ${UNIT} / 1%</div>
-      <div class="s">${gTone}</div>
-    </div>
-    <div class="sumgrid">
-      <div class="tile"><div class="k">${spotWord()} S</div><div class="v">${fmtP(S0)}</div><div class="s">${meta.s_ref_source}</div></div>
-      <div class="tile"><div class="k">Gamma Flip</div>
-        <div class="v" style="color:var(--flip)">${fmtP(flip)}</div>
-        <div class="s">${flip == null ? '整條曲線都在零軸下方，沒有交叉點'
-                                        : `距${spotWord()} ${dist(flip)}`}</div></div>
-      <div class="tile"><div class="k">GEX+ Flip</div>
-        <div class="v" style="color:var(--flip2)">${fmtP(flipP)}</div>
-        <div class="s">${flipP == null ? `同上・β=${S.beta.toFixed(1)}`
-                                       : `距${spotWord()} ${dist(flipP)}・β=${S.beta.toFixed(1)}`}</div></div>
-      <div class="tile"><div class="k">總 VEX</div>
-        <div class="v" style="font-size:17px;color:${totV >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(totV / E)}</div>
-        <div class="s">${UNIT} / vol 點（vanna）</div></div>
-      <div class="tile"><div class="k">總 GEX+</div>
-        <div class="v" style="font-size:17px;color:${totGp >= 0 ? 'var(--pos)' : 'var(--neg)'}">${fmt(totGp / E)}</div>
-        <div class="s">= GEX + β×VEX</div></div>
-      <div class="tile"><div class="k">總 vega 曝險</div>
-        <div class="v" style="font-size:17px;color:var(--ink)">${fmt(totVega / E)}</div>
-        <div class="s">${UNIT} / vol 點（部位損益）</div></div>
-    </div>
     <div class="rowlist">
       <div><span class="lbl">正 GEX 集中</span>${up.map(r => `<span class="chip p">${fmtP(r.K)} ${fmt(gexOf(r, sg) / E)}</span>`).join('') || '<span style="color:var(--ink3)">無</span>'}</div>
       <div><span class="lbl">負 GEX 集中</span>${dn.map(r => `<span class="chip n">${fmtP(r.K)} ${fmt(gexOf(r, sg) / E)}</span>`).join('') || '<span style="color:var(--ink3)">無</span>'}</div>
@@ -755,13 +767,23 @@ function drawSummary(rows, cv, flip, flipP) {
       <div><span class="lbl">未平倉牆</span>
         <span class="chip">Call ${cw ? fmtP(cw.K) : '—'}・${cw ? fmtK(cw.oc) : 0} 口</span>
         <span class="chip">Put ${pw ? fmtP(pw.K) : '—'}・${pw ? fmtK(pw.op) : 0} 口</span>
-        <span style="color:var(--ink3);font-size:11.5px">P/C = ${(v.oi_p / Math.max(v.oi_c, 1)).toFixed(2)}</span></div>
-      <div style="color:var(--ink3);font-size:11.5px;margin-top:6px">
-        ${vTone}。<br>
-        資料產出時只保留${spotWord()} ±${(tr.band_pct * 100).toFixed(0)}% 內的逐履約價明細（<b>跟上面的「顯示區間」是兩回事，
-        改顯示區間不會改變這一行</b>）；再外面還有 ${tr.n_strikes_dropped} 個履約價、${fmtK(tr.oi_outside)} 口未平倉，
-        佔總 GEX ${(Math.abs(gexOf(tr, sg)) / Math.max(Math.abs(totG), 1) * 100).toFixed(2)}%，<b>已經計入上方所有總量</b>。</div>
-    </div>`;
+        <span style="color:var(--ink3)">P/C = ${(v.oi_p / Math.max(v.oi_c, 1)).toFixed(2)}</span></div>
+      <div><span class="lbl">總 vega 曝險</span>
+        <span class="chip">${fmt(totVega / E)} ${UNIT} / vol 點</span>
+        <span style="color:var(--ink3)">部位損益，不是避險流量</span></div>
+      <div><span class="lbl">未平倉合計</span>
+        <span class="chip">${fmtK(meta.oi_total)} 口</span>
+        <span style="color:var(--ink3)">逐履約價明細涵蓋 ${(meta.oi_coverage * 100).toFixed(1)}%</span></div>
+    </div>
+    <div class="foot">${gTone}。<br>${vTone}。</div>`;
+
+  /* 兩段長說明搬進 ⓘ，畫面上不再佔位置 */
+  CARD_HELP['c-notes'] = `${gTone}。<br><br>${vTone}。<br><br>`
+    + `資料產出時只保留${spotWord()} ±${(tr.band_pct * 100).toFixed(0)}% 內的逐履約價明細`
+    + `（<b>跟「顯示區間」是兩回事</b>，改顯示區間不會改變這一行）；`
+    + `再外面還有 ${tr.n_strikes_dropped} 個履約價、${fmtK(tr.oi_outside)} 口未平倉，`
+    + `佔總 GEX ${(Math.abs(gexOf(tr, sg)) / Math.max(Math.abs(totG), 1) * 100).toFixed(2)}%，`
+    + `<b>已經計入上方所有總量</b>。`;
 }
 
 /* --------------------------------------------------------- 表格 */
@@ -1259,6 +1281,117 @@ function applyFs(v) {
     b.setAttribute('aria-pressed', Math.abs(parseFloat(b.dataset.v) - v) < 1e-9));
 }
 
+/* --------------------------------------------------------- ⓘ 說明與設定抽屜 */
+/* 畫面上只留數字，說明全部收進每一格右上角的 ⓘ。桌機滑過或點一下都會開，手機點一下開。 */
+const CARD_HELP = {
+  'k-spot': { t: '現貨 S', a: 'h-spot', h:
+    '這張圖所有計算的基準價。台指與美股用<b>現貨收盤價</b>，ES 用<b>主力月期貨結算價</b>（所以 ES 那頁寫的是「期貨」）。'
+    + '下面每一個「距現貨 ⋯%」都是跟這個數字比出來的。' },
+  'k-flip': { t: 'Gamma Flip', a: 'c-flip', h:
+    '總 GEX 由負轉正的那個價位。<b>在它下面</b>，造市商的避險是追漲殺跌，波動會被放大；'
+    + '<b>在它上面</b>，避險變成逆勢調整，波動被壓抑。<br><br>'
+    + '它是一條每天都會移動的線，<b>不是支撐壓力</b>——不要拿來當進出場點。' },
+  'k-flipp': { t: 'GEX+ Flip', a: 'c-flipp', h:
+    '把「跌的時候隱含波動率通常會漲」這件事也算進去之後的翻轉點。β 調得越大，它離 Gamma Flip 越遠。'
+    + '實際行情多半落在這兩條線之間。' },
+  'k-gex': { t: '總 GEX', a: 'c-gex', h:
+    '標的每動 <b>1%</b>，造市商為了維持避險要買賣多少金額。<br><br>'
+    + '<b>正的</b>＝他們逆勢調整（漲了賣、跌了買），行情容易被拉回、波動偏低。<br>'
+    + '<b>負的</b>＝他們順勢調整（漲了追、跌了殺），波動容易被放大。' },
+  'k-vex': { t: '總 VEX', a: 'c-vex', h:
+    '隱含波動率每動 <b>1 個百分點</b>，造市商要調整的金額。用的是 <b>vanna</b> 不是 vega——'
+    + 'vega 講的是部位損益，vanna 講的才是被迫產生的避險流量。<br><br>'
+    + '負的代表 IV 上升時他們得賣標的，會讓跌勢更兇。' },
+  'k-gexp': { t: '總 GEX+', a: 'c-gexp', h:
+    '＝ 總 GEX ＋ β × 總 VEX。把價格與波動率的連動合成一個數字。'
+    + 'β = 0 時它就退化成純 GEX；β 可以在右上角「設定」裡調。' },
+  'c-gex': { t: '各履約價 GEX', a: 'g-gex', h:
+    '每一個履約價各自貢獻多少 GEX。<b>看的是「哪幾根特別長」</b>，不是每一根的絕對值。<br><br>'
+    + '長條特別長的價位，代表標的走到那附近時造市商要調整的量最大，行情容易在那裡卡住或加速。' },
+  'c-vex': { t: '各履約價 VEX', a: 'g-vex', h:
+    '同樣逐履約價，但看的是<b>波動率</b>變動造成的避險流量。'
+    + '多半整片是負的，所以重點一樣放在「哪幾根特別深」，那是波動一旦擴大時壓力最集中的位置。' },
+  'c-curve': { t: 'GEX 與 GEX+ 曲線', a: 'g-curve', h:
+    '假設標的平移到各個價位、<b>重新把整本選擇權簿算一次</b>，畫出總量怎麼變。<br><br>'
+    + '曲線跟零軸的交點，就是上面那兩個 Flip。曲線越陡，代表那一段價格區間的結構變化越劇烈。' },
+  'c-exp': { t: '到期日結構拆解', a: 'g-exp', h:
+    '曝險集中在哪一個結算日。<b>越近的到期通常越大</b>，因為快到期的合約 gamma 最集中。<br><br>'
+    + '在上方「到期別」選單挑單一到期日，其他圖會跟著只看那一天。' },
+  'c-notes': { t: '結構摘要', a: 'c-conc', h: '' },     // 內容在 drawSummary 裡動態塞
+  'sym': { t: '這個標的', a: 'k-where', h: '' },        // 內容由 renderSymNote 塞
+};
+
+let popFor = null;
+function closePop() {
+  if (!popFor) return;
+  popFor.setAttribute('aria-expanded', 'false');
+  $('#pop').classList.remove('on');
+  popFor = null;
+}
+function openPop(btn) {
+  const key = btn.dataset.help, d = CARD_HELP[key];
+  if (!d) return;
+  const body = key === 'sym' ? SYM_HELP : (d.h || CARD_HELP[key].h);
+  if (!body) return;
+  const pop = $('#pop');
+  pop.innerHTML = `<button class="x" type="button" aria-label="關閉">×</button>`
+    + `<div class="pt">${d.t}</div><div>${body}</div>`
+    + (d.a ? `<a class="more" href="guide.html#${d.a}">看完整說明 →</a>` : '');
+  pop.classList.add('on');
+  btn.setAttribute('aria-expanded', 'true');
+  popFor = btn;
+  // 先貼在按鈕下方，再夾回視窗內
+  const r = btn.getBoundingClientRect(), pr = pop.getBoundingClientRect();
+  let left = Math.min(r.left, window.innerWidth - pr.width - 10);
+  let top = r.bottom + 8;
+  if (top + pr.height > window.innerHeight - 10) top = Math.max(10, r.top - pr.height - 8);
+  pop.style.left = Math.max(10, left) + 'px';
+  pop.style.top = top + 'px';
+}
+
+function wireHelp() {
+  const canHover = window.matchMedia('(hover:hover)').matches;
+  document.addEventListener('click', ev => {
+    const x = ev.target.closest('#pop .x');
+    if (x) { closePop(); return; }
+    if (ev.target.closest('#pop')) return;              // 彈出層裡面的連結照常運作
+    const btn = ev.target.closest('.iq');
+    if (!btn) { closePop(); return; }
+    ev.preventDefault();
+    if (popFor === btn) closePop(); else { closePop(); openPop(btn); }
+  });
+  if (canHover) {
+    document.addEventListener('pointerover', ev => {
+      const btn = ev.target.closest && ev.target.closest('.iq');
+      if (btn && popFor !== btn) { closePop(); openPop(btn); }
+    });
+  }
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape') return;
+    if (popFor) closePop(); else closeSetts();
+  });
+  window.addEventListener('scroll', closePop, { passive: true });
+  window.addEventListener('resize', closePop);
+}
+
+/* ---- 設定抽屜 ---- */
+function openSetts() {
+  $('#setts').classList.add('on'); $('#backdrop').classList.add('on');
+  $('#setts').setAttribute('aria-hidden', 'false');
+  $('#btnAdv').setAttribute('aria-expanded', 'true');
+}
+function closeSetts() {
+  $('#setts').classList.remove('on'); $('#backdrop').classList.remove('on');
+  $('#setts').setAttribute('aria-hidden', 'true');
+  $('#btnAdv').setAttribute('aria-expanded', 'false');
+}
+function wireSetts() {
+  $('#btnAdv').addEventListener('click', () =>
+    $('#setts').classList.contains('on') ? closeSetts() : openSetts());
+  $('#settsClose').addEventListener('click', closeSetts);
+  $('#backdrop').addEventListener('click', closeSetts);
+}
+
 /* --------------------------------------------------------- 啟動 */
 (async function boot() {
   const embedded = window.__GEXMAP__;
@@ -1277,15 +1410,8 @@ function applyFs(v) {
   $('#segSym').addEventListener('pointerover', warm);
   $('#segSym').addEventListener('touchstart', warm, { passive: true });
 
-  $('#symNote').addEventListener('click', ev => {
-    if (ev.target.closest('#symNote').classList.contains('clamped'))
-      $('#symNote').classList.remove('clamped');
-  });
-  $('#btnAdv').addEventListener('click', () => {
-    const on = $('.controls').classList.toggle('adv-on');
-    $('#btnAdv').textContent = on ? '收起設定 ▴' : '更多設定 ▾';
-    $('#btnAdv').setAttribute('aria-expanded', String(on));
-  });
+  wireHelp();
+  wireSetts();
 
   const pref = loadPref();
   applyFs(pref.fs || 1);

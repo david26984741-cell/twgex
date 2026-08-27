@@ -20,6 +20,16 @@ import engine
 FAILS = []
 
 
+
+def _guard_ok(args, meta) -> bool:
+    """把 build 的未平倉守門包成 True/False，方便測。"""
+    import build
+    try:
+        build._cme_oi_guard(args, meta)
+        return True
+    except SystemExit:
+        return False
+
 def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{('  — ' + detail) if detail else ''}")
     if not ok:
@@ -281,6 +291,50 @@ def cme_tests():
           f"當日 {m2['oi_total']} / 前一日 {m2['oi_prev_total']}")
     check("未平倉 0 的檔位不進圖", 7600.0 in c2["E4AQ26"]["strikes"] and 1000.0 not in c2["E4AQ26"]["strikes"],
           str(sorted(c2["E4AQ26"]["strikes"])))
+
+    # --- CBOE：prev_day_close 與 last_trade_time 換日時點不同 ---
+    import cboe as _cboe
+    snap = lambda ts, lt: _cboe.snapshot_state({"timestamp": ts, "data": {"last_trade_time": lt}})
+    a = snap("2026-08-26 20:10:00", "2026-08-26T16:00:00")
+    check("收盤後當天抓：沒有換日問題",
+          a["sess"] == "20260826" and a["us_date"] == "20260826" and not a["rolled"], str(a))
+    b = snap("2026-08-27 05:45:07", "2026-08-26T16:00:00")
+    check("隔天開盤前抓：認得出 prev_day_close 已經滾到新的一天",
+          b["sess"] == "20260826" and b["us_date"] == "20260827" and b["rolled"],
+          "這就是 2026-08-27 07:55 那次把 08/26 的價格標成 08/25 的成因")
+    c = snap("2026-08-27 15:05:00", "2026-08-27T11:05:00")
+    check("開盤後抓（設計的時點）：一切對齊", not c["rolled"], str(c))
+    d = snap("", "")
+    check("欄位缺漏時不會炸、也不會誤判成換日", d["rolled"] is False, str(d))
+
+    # --- 抓太早：成交量表還沒發布 ---
+    class _A:
+        allow_stale_oi = False
+
+    dump3 = {"tradeDate": "08/21/2026", "oiAsOf": "close", "oiReport": "P",
+             "futures": [["SEP 26", "7691.25", "2,019,214"]],
+             "series": [
+                 {"code": "E4AQ26", "name": "E-mini S&P 500 Monday Weekly Options",
+                  "type": "MW1", "lastTrade": "24 Aug 2026", "oiSrc": "P",
+                  "rows": [["7600.00", "Call", "20.00", "99,000", "10", "98,000"]]},
+                 {"code": "EW3U26", "name": "E-mini S&P 500 Weekly Options",
+                  "type": "EOW", "lastTrade": "18 Sep 2026", "oiSrc": "settle",
+                  "rows": [["7600.00", "Put", "18.00", "500", "5", "500"]]}]}
+    c3, m3 = cme.chain_from_dump(dump3, prev_td=prev)
+    check("退回前一日的系列有被記下來",
+          m3["oi_fellback_codes"] == ["EW3U26"] and m3["oi_fellback_oi"] == 500,
+          f"{m3['oi_fellback_codes']} / {m3['oi_fellback_oi']} 口")
+    check("退回的量很小時照樣產出",
+          _guard_ok(_A(), m3), "500 / 99500 = 0.50%")
+
+    m4 = dict(m3, oi_fellback_oi=50000)
+    check("退回的量占比過大時擋下來", not _guard_ok(_A(), m4), "50000 / 99500 = 50%")
+    m5 = dict(m3, oi_asof="prev")
+    check("整批退回一定擋下來", not _guard_ok(_A(), m5), "oi_asof=prev")
+
+    class _B:
+        allow_stale_oi = True
+    check("加了 --allow-stale-oi 可以放行部分退回", _guard_ok(_B(), m4))
 
     # --- 成交量表的月份守門 ---
     class FakeGet:

@@ -137,6 +137,8 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
     n_all = n_used = 0
     tried = 0
     n_merged = n_fellback = 0
+    fb_oi = 0
+    fb_codes = []
     rt_lock = ""
     for s in list_series(sym):
         ltd = _parse_last_trade(s["last_trade"])
@@ -167,6 +169,7 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
         else:
             vmap = None
             n_fellback += 1
+            fb_codes.append(s["code"])
         blk = chain.setdefault(s["code"], {
             "ltd": _prev(ltd) if s["american"] else ltd,
             "kind": kind_of(s["name"], s["american"]),
@@ -178,6 +181,8 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
             cp0 = "C" if str(x.get("type", "")).upper().startswith("C") else "P"
             if vmap is not None and K0 is not None:
                 oi = vmap.get((cp0, K0), (oi, 0))[0]   # 併入當日收盤未平倉
+            elif vmap is None and oi > 0:
+                fb_oi += oi                            # 這一檔用的是前一日未平倉
             if oi <= 0:
                 continue
             px = _num(x.get("settle"))
@@ -199,7 +204,8 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
             "n_contracts_all": n_all, "n_contracts_used": n_used,
             "n_requests": tried, "spot": front_settle(fut),
             "oi_asof": "close" if n_merged else "prev",
-            "oi_report": rt_lock, "oi_merged": n_merged, "oi_fellback": n_fellback}
+            "oi_report": rt_lock, "oi_merged": n_merged, "oi_fellback": n_fellback,
+            "oi_fellback_oi": fb_oi, "oi_fellback_codes": fb_codes}
     return chain, meta
 
 
@@ -303,12 +309,17 @@ def chain_from_dump(dump: dict, prev_td=None) -> Tuple[Dict[str, dict], dict]:
     chain: Dict[str, dict] = {}
     n_all = n_used = 0
     oi_tot = oi_prev_tot = 0
+    fb_oi = 0
+    fb_codes = []
     src = {}
     for s in dump.get("series", []):
         src[s.get("oiSrc", "settle")] = src.get(s.get("oiSrc", "settle"), 0) + 1
         ltd = _parse_last_trade(s.get("lastTrade", ""))
         if ltd is None or (trade_day and ltd.strftime("%Y%m%d") <= trade_day):
             continue
+        fb = s.get("oiSrc", "settle") not in ("F", "P")
+        if fb:
+            fb_codes.append(s.get("code", "?"))
         american = s.get("type") == "AME"
         blk = chain.setdefault(s["code"], {
             "ltd": _prev(ltd) if american else ltd,
@@ -321,6 +332,8 @@ def chain_from_dump(dump: dict, prev_td=None) -> Tuple[Dict[str, dict], dict]:
             oi = _int(oi)
             oi_prev_tot += _int(oi_prev) if oi_prev is not None else oi
             oi_tot += oi
+            if fb and oi > 0:
+                fb_oi += oi
             if oi <= 0:
                 continue
             px = _num(settle)
@@ -341,4 +354,5 @@ def chain_from_dump(dump: dict, prev_td=None) -> Tuple[Dict[str, dict], dict]:
                    "oi_asof": dump.get("oiAsOf") or ("close" if merged else "prev"),
                    "oi_report": dump.get("oiReport") or "",
                    "oi_merged": merged, "oi_fellback": src.get("settle", 0),
+                   "oi_fellback_oi": fb_oi, "oi_fellback_codes": fb_codes,
                    "oi_total": oi_tot, "oi_prev_total": oi_prev_tot}

@@ -11,64 +11,101 @@
 :root{
   --bg:#0b1017; --surface:#0f1620; --surface2:#141d29; --grid:#243040; --line:#1c2836;
   --ink:#e6edf3; --ink2:#9aa7b4; --ink3:#6b7a8a;
-  --pos:#199e70; --neg:#e66767;          /* GEX 正/負（可切色盲友善） */
-  --call:#3987e5; --put:#e66767;          /* VEX 買權/賣權主導 */
-  --curve1:#199e70; --curve2:#9085e9;     /* GEX / GEX+ */
+  --pos:#199e70; --neg:#e66767;
+  --call:#3987e5; --put:#e66767;
+  --curve1:#199e70; --curve2:#9085e9;
   --spot:#ffffff; --flip:#c98500; --flip2:#d55181;
-  --fs:1;                                  /* 字級倍率，由上方「字級」控制 */
+  --accent:#4f8fd6;                        /* 選中的標的、連結 */
+  --fs:1;
 }
 :root[data-cvd="1"]{ --pos:#3987e5; --neg:#d95926; --call:#3987e5; --put:#d95926; --curve1:#3987e5; --curve2:#9085e9; }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);
   font-family:-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
-  font-size:calc(14px * var(--fs)); line-height:1.55;
-  -webkit-font-smoothing:antialiased}
+  font-size:calc(14px * var(--fs)); line-height:1.55; -webkit-font-smoothing:antialiased}
 .wrap{max-width:1560px;margin:0 auto;padding:20px 22px 56px}
-.panel,.controls,details{max-width:100%;min-width:0}
-header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:4px}
-h1{font-size:calc(20px * var(--fs));font-weight:600;margin:0;letter-spacing:.02em}
-.sub{color:var(--ink2);font-size:calc(13px * var(--fs))}
-.sub b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
-.src{color:var(--ink3);font-size:calc(12px * var(--fs));margin:2px 0 16px}
+.panel,details{max-width:100%;min-width:0}
+
+/* ================= 頂欄：標的膠囊 ＋ 資料日期／到期別／設定 ================= */
+.topbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;
+  background:var(--surface);border:1px solid var(--line);border-radius:14px;
+  padding:10px 12px;margin-bottom:18px}
+.topbar .left{min-width:0;flex:1 1 auto}
+.topbar .right{display:flex;align-items:center;gap:9px;flex:0 0 auto}
+.seg.sym{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.seg.sym::-webkit-scrollbar{display:none}
+.seg.sym button{appearance:none;flex:0 0 auto;background:var(--surface2);border:1px solid var(--line);
+  border-radius:10px;padding:8px 15px;color:var(--ink2);font:inherit;cursor:pointer;text-align:left;line-height:1.25}
+.seg.sym button b{display:block;font-size:calc(13px * var(--fs));font-weight:600}
+.seg.sym button i{display:block;font-style:normal;font-size:calc(10px * var(--fs));
+  color:var(--ink3);letter-spacing:.04em;text-transform:uppercase}
+.seg.sym button:hover{color:var(--ink);border-color:#2c3d52}
+.seg.sym button[aria-pressed="true"]{background:#1a2637;border-color:var(--accent);color:#fff}
+.seg.sym button[aria-pressed="true"] i{color:#9fc4ea}
+.field{display:flex;flex-direction:column;gap:2px;background:var(--surface2);border:1px solid var(--line);
+  border-radius:10px;padding:6px 11px;min-width:0}
+.field>span{font-size:calc(10px * var(--fs));color:var(--ink3);letter-spacing:.03em}
+.field select{appearance:none;background:none;border:0;color:var(--ink);font:inherit;
+  font-size:calc(13px * var(--fs));font-weight:600;padding:0;max-width:230px;cursor:pointer}
+.field select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.field b{font-size:calc(13px * var(--fs));font-weight:600;font-variant-numeric:tabular-nums}
+.field .seg{display:flex;overflow-x:auto;scrollbar-width:none;max-width:min(46vw,360px)}
+.field .seg::-webkit-scrollbar{display:none}
+.field .seg button{appearance:none;flex:0 0 auto;background:none;border:0;border-right:1px solid var(--line);
+  color:var(--ink2);font:inherit;font-size:calc(12px * var(--fs));padding:1px 9px;cursor:pointer;white-space:nowrap}
+.field .seg button:last-child{border-right:0}
+.field .seg button[aria-pressed="true"]{color:#fff;font-weight:600}
+.iconbtn{appearance:none;display:inline-flex;align-items:center;gap:6px;background:var(--surface2);
+  border:1px solid var(--line);border-radius:10px;color:var(--ink2);font:inherit;
+  font-size:calc(12px * var(--fs));padding:9px 13px;cursor:pointer;white-space:nowrap}
+.iconbtn:hover{color:var(--ink);border-color:#2c3d52;background:#1b2635}
+
+/* ================= 標題列 ================= */
+.titlerow{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px 14px;margin:0 2px 14px}
+.titlerow .who{min-width:0;flex:1 1 auto}
+.whorow{display:flex;align-items:center;gap:8px}
+h1{font-size:calc(19px * var(--fs));font-weight:700;margin:0;letter-spacing:.03em;color:var(--accent)}
+.subline{color:var(--ink2);font-size:calc(12.5px * var(--fs));margin-top:1px}
+.subline b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.titlelinks{display:flex;gap:8px;flex:0 0 auto}
 .guidelink{display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid #2b4763;
-  border-radius:7px;padding:4px 11px;color:#a9cdf0;font-size:calc(12px * var(--fs));text-decoration:none;
+  border-radius:8px;padding:5px 12px;color:#a9cdf0;font-size:calc(12px * var(--fs));text-decoration:none;
   white-space:nowrap;line-height:1.4}
 .guidelink:hover{background:#1b2b3d;color:#d6e9fb}
 .guidelink.pri{background:#1c3350;border-color:#3a628c;color:#dcecfb;font-weight:600}
 .guidelink.pri:hover{background:#24425f}
 
-/* ---- 篩選列：一排，在圖表上方 ---- */
-.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
-  background:var(--surface);border:1px solid var(--line);border-radius:10px;
-  padding:11px 14px;margin-bottom:16px}
-.ctl{display:flex;align-items:center;gap:7px}
-.ctl>label{color:var(--ink2);font-size:calc(12px * var(--fs));white-space:nowrap}
-.seg{display:flex;background:var(--surface2);border:1px solid var(--line);border-radius:7px;overflow:hidden}
-.seg button{appearance:none;background:none;border:0;color:var(--ink2);font:inherit;font-size:calc(12px * var(--fs));
-  padding:5px 10px;cursor:pointer;white-space:nowrap;border-right:1px solid var(--line)}
-.seg button:last-child{border-right:0}
-.seg button:hover{color:var(--ink);background:#1b2635}
-.seg button[aria-pressed="true"]{background:#22304a;color:#fff}
-select,input[type=range]{background:var(--surface2);border:1px solid var(--line);color:var(--ink);
-  border-radius:7px;padding:5px 8px;font:inherit;font-size:calc(12px * var(--fs))}
-input[type=range]{padding:0;width:104px;accent-color:var(--curve2)}
-.val{font-variant-numeric:tabular-nums;color:var(--ink);min-width:30px;font-size:calc(12px * var(--fs))}
+/* ================= 六個 KPI 磚 ================= */
+.kpirow{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px}
+@media(max-width:1240px){.kpirow{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:640px){.kpirow{grid-template-columns:repeat(2,1fr);gap:9px}}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 13px;min-width:0}
+.kpi .k{display:flex;align-items:center;gap:5px;font-size:calc(11px * var(--fs));color:var(--ink2);margin-bottom:5px}
+.kpi .v{font-size:calc(23px * var(--fs));font-weight:650;font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em;line-height:1.15;word-break:break-word}
+.kpi .v small{font-size:calc(12px * var(--fs));font-weight:600;color:var(--ink2);margin-left:5px}
+.kpi .s{font-size:calc(10.5px * var(--fs));color:var(--ink3);margin-top:4px;line-height:1.5}
 
-/* ---- 面板 ---- */
-.symbar{margin:0 0 14px}
-.seg.sym button{padding:8px 16px;text-align:left;line-height:1.25}
-.seg.sym button b{display:block;font-size:calc(13px * var(--fs));font-weight:600}
-.seg.sym button i{display:block;font-style:normal;font-size:calc(10.5px * var(--fs));color:var(--ink3);letter-spacing:.02em}
-.seg.sym button[aria-pressed="true"] i{color:#9fb4d8}
+/* ================= 卡片 ================= */
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:1080px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px 10px}
 .panel.wide{margin-top:16px}
-.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px 10px}
-.ptitle{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:2px}
-.ptitle h2{font-size:calc(14px * var(--fs));font-weight:600;margin:0}
-.ptitle .note{font-size:calc(11px * var(--fs));color:var(--ink3)}
-.legend{display:flex;gap:6px 14px;flex-wrap:wrap;margin:6px 0 2px;font-size:calc(11.5px * var(--fs));color:var(--ink2)}
+.cardhead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
+.eyebrow{font-size:calc(9.5px * var(--fs));letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink3);font-weight:600;margin-bottom:2px}
+.cardhead h2{font-size:calc(15px * var(--fs));font-weight:650;margin:0;letter-spacing:.01em}
+.headright{display:flex;align-items:center;gap:7px;flex:0 0 auto}
+.pill{background:var(--surface2);border:1px solid var(--line);border-radius:999px;
+  padding:3px 10px;font-size:calc(10.5px * var(--fs));color:var(--ink2);white-space:nowrap}
+.iq{appearance:none;flex:0 0 auto;width:calc(18px * var(--fs));height:calc(18px * var(--fs));
+  border-radius:50%;background:var(--surface2);border:1px solid #2c3d52;color:var(--ink2);
+  font:inherit;font-size:calc(11px * var(--fs));font-weight:700;line-height:1;
+  cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
+.iq:hover,.iq[aria-expanded="true"]{background:#25405c;border-color:var(--accent);color:#dcecfb}
+.iq:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.legend{display:flex;gap:6px 14px;flex-wrap:wrap;margin:2px 0;font-size:calc(11.5px * var(--fs));color:var(--ink2)}
 .legend .it{display:inline-flex;align-items:center;white-space:nowrap}
 .legend i{display:inline-block;width:13px;height:3px;border-radius:2px;margin-right:5px;flex:0 0 auto}
 .legend i.d{height:0;border-top:2px dashed currentColor;border-radius:0;background:none!important}
@@ -78,25 +115,63 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .gl{stroke:var(--grid);stroke-width:1;shape-rendering:crispEdges}
 .zero{stroke:#3a4a5e;stroke-width:1.5}
 
-/* ---- 摘要面板 ---- */
-.sumgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0 12px}
-@media(max-width:520px){.sumgrid{grid-template-columns:1fr 1fr}}
-.tile{background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
-.tile .k{font-size:calc(11px * var(--fs));color:var(--ink2);margin-bottom:3px}
-.tile .v{font-size:calc(19px * var(--fs));font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
-.tile .s{font-size:calc(11px * var(--fs));color:var(--ink3);margin-top:2px}
-.hero{background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:10px}
-.hero .k{font-size:calc(11px * var(--fs));color:var(--ink2)}
-.hero .v{font-size:calc(26px * var(--fs));font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin:1px 0 2px}
-.hero .s{font-size:calc(12px * var(--fs));color:var(--ink2)}
-.rowlist{font-size:calc(12.5px * var(--fs));line-height:1.9}
-.rowlist .lbl{color:var(--ink2);display:inline-block;min-width:104px}
+/* ================= 結構摘要卡 ================= */
+.rowlist{font-size:calc(12.5px * var(--fs));line-height:1.95}
+.rowlist>div{padding:5px 0;border-bottom:1px solid var(--line)}
+.rowlist>div:last-child{border-bottom:0}
+.rowlist .lbl{color:var(--ink2);display:inline-block;min-width:100px}
 .chip{display:inline-block;font-variant-numeric:tabular-nums;background:var(--surface2);
   border:1px solid var(--line);border-radius:6px;padding:1px 7px;margin-right:6px;font-size:calc(12px * var(--fs))}
 .chip.p{color:var(--pos);border-color:color-mix(in srgb,var(--pos) 40%,var(--line))}
 .chip.n{color:var(--neg);border-color:color-mix(in srgb,var(--neg) 40%,var(--line))}
+.foot{color:var(--ink3);font-size:calc(11px * var(--fs));line-height:1.75;margin-top:8px}
 
-/* ---- tooltip ---- */
+/* ================= ⓘ 彈出層 ================= */
+#pop{position:fixed;z-index:70;max-width:min(92vw,340px);background:#0c141d;border:1px solid #2c3d52;
+  border-radius:12px;padding:13px 15px;box-shadow:0 14px 40px rgba(0,0,0,.62);
+  font-size:calc(12.5px * var(--fs));line-height:1.8;color:var(--ink2);display:none}
+#pop.on{display:block}
+#pop .pt{font-weight:650;color:var(--ink);font-size:calc(13px * var(--fs));margin-bottom:4px}
+#pop b{color:var(--ink)}
+#pop .more{display:inline-block;margin-top:8px;color:#8fc0ee;text-decoration:none;font-size:calc(12px * var(--fs))}
+#pop .more:hover{text-decoration:underline}
+#pop .x{position:absolute;top:6px;right:8px;appearance:none;background:none;border:0;color:var(--ink3);
+  font:inherit;font-size:calc(15px * var(--fs));cursor:pointer;line-height:1;padding:3px 5px}
+#pop .x:hover{color:var(--ink)}
+
+/* ================= 設定抽屜 ================= */
+#backdrop{position:fixed;inset:0;background:rgba(4,8,12,.62);z-index:80;display:none}
+#backdrop.on{display:block}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(92vw,352px);z-index:90;
+  background:var(--surface);border-left:1px solid var(--line);padding:18px 18px 26px;
+  overflow-y:auto;transform:translateX(102%);transition:transform .18s ease;
+  -webkit-overflow-scrolling:touch}
+.drawer.on{transform:none}
+.drawer h2{font-size:calc(15px * var(--fs));margin:0 0 2px;font-weight:650}
+.drawer .hint{color:var(--ink3);font-size:calc(11.5px * var(--fs));margin-bottom:16px}
+.drawer .x{position:absolute;top:14px;right:14px;appearance:none;background:var(--surface2);
+  border:1px solid var(--line);border-radius:8px;color:var(--ink2);font:inherit;
+  font-size:calc(13px * var(--fs));cursor:pointer;padding:4px 10px}
+.drawer .x:hover{color:var(--ink)}
+.ctl{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-bottom:1px solid var(--line)}
+.ctl:last-child{border-bottom:0}
+.ctl>label{color:var(--ink);font-size:calc(12.5px * var(--fs));font-weight:600}
+.ctl .why{color:var(--ink3);font-size:calc(11px * var(--fs));line-height:1.6;margin-top:-3px}
+.ctl .rowin{display:flex;align-items:center;gap:9px}
+.seg{display:flex;background:var(--surface2);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{appearance:none;background:none;border:0;color:var(--ink2);font:inherit;
+  font-size:calc(12px * var(--fs));padding:6px 11px;cursor:pointer;white-space:nowrap;
+  border-right:1px solid var(--line);flex:1 1 auto}
+.seg button:last-child{border-right:0}
+.seg button:hover{color:var(--ink);background:#1b2635}
+.seg button[aria-pressed="true"]{background:#22304a;color:#fff}
+.drawer select{background:var(--surface2);border:1px solid var(--line);color:var(--ink);
+  border-radius:8px;padding:7px 9px;font:inherit;font-size:calc(12.5px * var(--fs));width:100%}
+input[type=range]{background:var(--surface2);border:1px solid var(--line);border-radius:8px;
+  padding:0;flex:1 1 auto;min-width:0;accent-color:var(--curve2)}
+.val{font-variant-numeric:tabular-nums;color:var(--ink);min-width:30px;font-size:calc(12px * var(--fs))}
+
+/* ================= tooltip ================= */
 #tip{position:fixed;pointer-events:none;z-index:50;background:#0a1119;border:1px solid #2b3a4d;
   border-radius:8px;padding:8px 10px;font-size:calc(12px * var(--fs));line-height:1.65;color:var(--ink);
   box-shadow:0 8px 26px rgba(0,0,0,.55);opacity:0;transition:opacity .09s;max-width:280px}
@@ -104,8 +179,8 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 #tip .r{display:flex;justify-content:space-between;gap:16px;font-variant-numeric:tabular-nums}
 #tip .r span:first-child{color:var(--ink2)}
 
-/* ---- 表格 / 說明 ---- */
-details{margin-top:16px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+/* ================= 表格 / 說明 ================= */
+details{margin-top:16px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 16px}
 summary{cursor:pointer;font-size:calc(13px * var(--fs));font-weight:600;color:var(--ink)}
 summary::marker{color:var(--ink3)}
 .tblwrap{max-height:460px;overflow:auto;margin-top:12px;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
@@ -119,7 +194,6 @@ tbody tr:hover{background:#141d29}
 .meth code{background:var(--surface2);padding:1px 5px;border-radius:4px;font-size:calc(12px * var(--fs));color:var(--ink)}
 .meth h3{font-size:calc(13px * var(--fs));color:var(--ink);margin:14px 0 4px}
 .warn{border-left:3px solid var(--flip);padding-left:11px;margin:10px 0}
-/* ---- 說明用圖解 ---- */
 .fig{margin:14px 0 6px}
 .figrow{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;max-width:calc(700px * var(--fs))}
 .figcol{flex:1 1 280px;min-width:0}
@@ -131,25 +205,35 @@ tbody tr:hover{background:#141d29}
 .figcap{font-size:calc(11.5px * var(--fs));color:var(--ink3);line-height:1.8;margin:7px 0 2px;
         max-width:calc(560px * var(--fs))}
 .figcap b{color:var(--ink2)}
-/* ---- 手機 ---- */
+
+/* ================= 警示 ================= */
+#err{display:none;background:#2a1416;border:1px solid #5c2b2f;border-radius:12px;padding:14px 16px;color:#f0c9c9;margin-bottom:14px}
+.notice{background:#241c0c;border:1px solid #5c4a1f;border-radius:12px;padding:11px 14px;color:#e8d5a6;
+  font-size:calc(12.5px * var(--fs));line-height:1.7;margin-bottom:14px}
+.notice.stale{background:#2a1416;border-color:#5c2b2f;color:#f0c9c9}
+.notice.stale b{color:#ffdede}
+.notice code{background:#00000055;padding:1px 5px;border-radius:4px}
+
+/* ================= 手機 ================= */
 @media(max-width:900px){
   .wrap{padding:14px calc(12px + env(safe-area-inset-right)) 40px calc(12px + env(safe-area-inset-left))}
   .grid{gap:12px}
   .panel{padding:12px 11px 8px}
 }
 @media(max-width:760px){
-  header{gap:2px 10px}
-  .sub{line-height:1.7}
-  .controls{padding:10px 11px;gap:9px 12px}
-  .ctl{flex:1 1 100%;min-width:0}
-  .ctl>label{flex:0 0 68px}
-  .seg{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;min-width:0}
-  .seg::-webkit-scrollbar{display:none}
-  .seg button{flex:0 0 auto}
-  select{min-width:0;max-width:100%}
-  #selExp{max-width:100%!important;flex:1 1 auto}
-  input[type=range]{flex:1 1 auto;width:auto;min-width:90px}
-  .sumgrid{grid-template-columns:1fr 1fr;gap:8px}
+  .topbar{padding:9px 10px;gap:9px}
+  .topbar .right{width:100%;gap:8px}
+  .topbar .right #ctlDate{flex:0 0 auto}
+  .topbar .right #ctlExp{flex:1 1 auto;min-width:0}
+  .field select{text-overflow:ellipsis}
+  .field select{max-width:100%;width:100%}
+  .field .seg{max-width:100%}
+  .titlerow{gap:4px 10px}
+  .titlelinks{width:100%}
+  .guidelink{flex:1 1 auto;justify-content:center}
+  .kpi{padding:10px 11px}
+  .kpi .v{font-size:calc(19px * var(--fs))}
+  .cardhead{flex-wrap:wrap;gap:6px}
   .rowlist .lbl{display:block;min-width:0;margin-bottom:2px}
   .chip{margin-bottom:4px}
   #tip{max-width:min(86vw,300px)}
@@ -160,117 +244,94 @@ tbody tr:hover{background:#141d29}
   .figrow{gap:14px}
   .figcol{flex:1 1 100%}
   .figsvg,.figsvg.half{max-width:100%}
+  /* 手機的設定抽屜改成從下方推上來 */
+  .drawer{top:auto;left:0;right:0;bottom:0;width:auto;max-height:82vh;
+    border-left:0;border-top:1px solid var(--line);border-radius:16px 16px 0 0;
+    transform:translateY(102%)}
 }
 @media(max-width:430px){
-  .sumgrid{grid-template-columns:1fr}
   .seg.sym button i{display:none}
-  .seg.sym button{padding:7px 12px}
+  .seg.sym button{padding:7px 13px}
 }
-#err{display:none;background:#2a1416;border:1px solid #5c2b2f;border-radius:10px;padding:14px 16px;color:#f0c9c9}
-.notice{background:#241c0c;border:1px solid #5c4a1f;border-radius:10px;padding:11px 14px;color:#e8d5a6;font-size:calc(12.5px * var(--fs));line-height:1.7;margin-bottom:14px}
-.notice.stale{background:#2a1416;border-color:#5c2b2f;color:#f0c9c9}
-.notice.stale b{color:#ffdede}
-.notice code{background:#00000055;padding:1px 5px;border-radius:4px}
-.symnote{background:#0f1a24;border:1px solid #24435c;border-radius:10px;padding:11px 14px;color:#b9d4e6;
-         font-size:calc(12.5px * var(--fs));line-height:1.75;margin-bottom:14px}
-.symnote b{color:#e6f2fa}
-.symnote .sz{color:#7f96a8;display:block;margin-top:4px;font-size:calc(11.5px * var(--fs))}
-#btnAdv{display:none;appearance:none;background:var(--surface2);border:1px solid var(--line);
-  color:var(--ink2);font:inherit;font-size:calc(12px * var(--fs));border-radius:7px;padding:5px 11px;cursor:pointer}
-#btnAdv:hover{color:var(--ink);background:#1b2635}
-@media(max-width:760px){
-  #btnAdv{display:inline-flex;flex:0 0 auto}
-  .controls .ctl.adv{display:none}
-  .controls.adv-on .ctl.adv{display:flex}
-}
-/* 手機上先只露出第一段說明，點一下才展開，讓圖可以早一點出現 */
-.symnote.clamped{position:relative;max-height:calc(58px * var(--fs));overflow:hidden;cursor:pointer}
-.symnote.clamped::after{content:'⋯ 點一下看完整說明';position:absolute;left:0;right:0;bottom:0;
-  padding:14px 14px 5px;font-size:calc(11.5px * var(--fs));color:#8fb3cc;
-  background:linear-gradient(to bottom,rgba(15,26,36,0),#0f1a24 62%)}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="symbar"><div class="seg sym" id="segSym"></div></div>
 
-  <header>
-    <h1>選擇權曝險地圖</h1>
-    <a class="guidelink pri" href="easy.html">五分鐘看懂 →</a>
-    <a class="guidelink" href="guide.html">每個數字怎麼用</a>
-    <div class="sub">交易日 <b id="mDate">—</b> ・ <span id="mSpotK">現貨</span> <b id="mSpot">—</b> ・ <b id="mLegs">—</b> 份契約 ・ <b id="mExp">—</b> 個到期日 ・ 未平倉 <b id="mOI">—</b> 口 ・ OI 覆蓋 <b id="mCov">—</b></div>
-  </header>
-  <div class="src" id="mSrc">—</div>
+  <div class="topbar">
+    <div class="left"><div class="seg sym" id="segSym"></div></div>
+    <div class="right">
+      <div class="field" id="ctlDate" style="display:none"><span>資料日期</span>
+        <select id="selDate" aria-label="資料日期"></select></div>
+      <div class="field" id="ctlExp"><span>到期別</span>
+        <div class="seg" id="segExp"></div>
+        <select id="selExp" style="display:none" aria-label="到期別"></select></div>
+      <button class="iconbtn" id="btnAdv" type="button" aria-expanded="false" aria-controls="setts">⚙ 設定</button>
+    </div>
+  </div>
+
+  <div class="titlerow">
+    <div class="who">
+      <div class="whorow"><h1 id="symTitle">—</h1>
+        <button class="iq" type="button" data-help="sym" aria-expanded="false" aria-label="這個標的的說明">i</button></div>
+      <div class="subline" id="mSubline">—</div>
+    </div>
+    <div class="titlelinks">
+      <a class="guidelink pri" href="easy.html">五分鐘看懂 →</a>
+      <a class="guidelink" href="guide.html">每個數字怎麼用</a>
+    </div>
+  </div>
 
   <div id="err"></div>
-  <div id="symNote" class="symnote" style="display:none"></div>
   <div id="staleWarn" class="notice stale" style="display:none"></div>
   <div id="dateWarn" class="notice" style="display:none"></div>
 
-  <div class="controls">
-    <div class="ctl" id="ctlDate" style="display:none"><label>資料日期</label>
-      <select id="selDate"></select></div>
-    <div class="ctl"><label>到期別</label><div class="seg" id="segExp"></div>
-      <select id="selExp" style="display:none;max-width:300px"></select></div>
-    <div class="ctl"><label>顯示區間</label>
-      <select id="selBand">
-        <option value="0.05">±5%</option>
-        <option value="0.10">±10%</option>
-        <option value="0.20" selected>±20%</option>
-      </select></div>
-    <div class="ctl"><label>履約價分桶</label>
-      <select id="selBucket">
-        <option value="1" selected>原始履約價</option>
-        <option value="50">50 點</option>
-        <option value="100">100 點</option>
-        <option value="200">200 點</option>
-      </select></div>
-    <button id="btnAdv" type="button" aria-expanded="false">更多設定 ▾</button>
-    <div class="ctl adv"><label title="GEX、VEX、GEX+ 三者共用同一個造市商方向假設">造市商假設</label>
-      <div class="seg" id="segSign">
-        <button data-v="net" aria-pressed="true">買權多・賣權空</button>
-        <button data-v="gross">兩邊皆空</button>
-      </div></div>
-    <div class="ctl adv"><label title="標的每移動 1%，隱含波動率反向變動幾個波動點。β=0 時 GEX+ 等於 GEX">β</label>
-      <input type="range" id="rngBeta" min="0" max="2" step="0.1" value="1"><span class="val" id="valBeta">1.0</span></div>
-    <div class="ctl adv"><label>字級</label>
-      <div class="seg" id="segFs">
-        <button data-v="0.88">小</button>
-        <button data-v="1" aria-pressed="true">標準</button>
-        <button data-v="1.15">大</button>
-        <button data-v="1.32">特大</button>
-      </div></div>
-    <div class="ctl adv"><label>色盲友善</label>
-      <div class="seg" id="segCvd">
-        <button data-v="0" aria-pressed="true">綠正紅負</button>
-        <button data-v="1">藍正橘負</button>
-      </div></div>
-  </div>
+  <div class="kpirow" id="kpis"></div>
 
   <div class="grid">
     <div class="panel">
-      <div class="ptitle"><h2>GEX 各履約價</h2><span class="note" id="nGex">億元 / 標的移動 1%</span></div>
+      <div class="cardhead">
+        <div><div class="eyebrow">Strike Map</div><h2 id="hGex">各履約價 GEX</h2></div>
+        <div class="headright"><span class="pill" id="nGex">—</span>
+          <button class="iq" type="button" data-help="c-gex" aria-expanded="false" aria-label="GEX 圖說明">i</button></div>
+      </div>
       <div class="legend" id="lgGex"></div>
       <div id="chGex"></div>
     </div>
     <div class="panel">
-      <div class="ptitle"><h2>VEX 各履約價</h2><span class="note" id="nVex">vanna 曝險・億元 / 波動率 1 點</span></div>
+      <div class="cardhead">
+        <div><div class="eyebrow">Volatility Map</div><h2 id="hVex">各履約價 VEX</h2></div>
+        <div class="headright"><span class="pill" id="nVex">—</span>
+          <button class="iq" type="button" data-help="c-vex" aria-expanded="false" aria-label="VEX 圖說明">i</button></div>
+      </div>
       <div class="legend" id="lgVex"></div>
       <div id="chVex"></div>
     </div>
     <div class="panel">
-      <div class="ptitle"><h2>GEX vs GEX+ 情境曲線</h2><span class="note">標的平移後重算全簿</span></div>
+      <div class="cardhead">
+        <div><div class="eyebrow">Scenario Curve</div><h2>GEX 與 GEX+ 曲線</h2></div>
+        <div class="headright"><span class="pill" id="nCurve">—</span>
+          <button class="iq" type="button" data-help="c-curve" aria-expanded="false" aria-label="情境曲線說明">i</button></div>
+      </div>
       <div class="legend" id="lgCurve"></div>
       <div id="chCurve"></div>
     </div>
     <div class="panel">
-      <div class="ptitle"><h2>曝險摘要</h2><span class="note" id="nSum">—</span></div>
+      <div class="cardhead">
+        <div><div class="eyebrow">Structure Notes</div><h2>結構摘要</h2></div>
+        <div class="headright"><span class="pill" id="nSum">—</span>
+          <button class="iq" type="button" data-help="c-notes" aria-expanded="false" aria-label="結構摘要說明">i</button></div>
+      </div>
       <div id="summary"></div>
     </div>
   </div>
 
   <div class="panel wide">
-    <div class="ptitle"><h2>到期日結構拆解</h2><span class="note">曝險集中在哪一個結算日</span></div>
+    <div class="cardhead">
+      <div><div class="eyebrow">Expiry Breakdown</div><h2>到期日結構拆解</h2></div>
+      <div class="headright"><span class="pill">曝險集中在哪一個結算日</span>
+        <button class="iq" type="button" data-help="c-exp" aria-expanded="false" aria-label="到期日結構說明">i</button></div>
+    </div>
     <div class="legend" id="lgExp"></div>
     <div id="chExp"></div>
   </div>
@@ -285,16 +346,67 @@ tbody tr:hover{background:#141d29}
     <div class="tblhint">表格可左右／上下滑動</div><div class="tblwrap"><table id="tblExp"><thead></thead><tbody></tbody></table></div>
   </details>
 
-  <details id="dHow" open>
+  <details id="dHow">
     <summary>怎麼看這張圖（五個步驟）</summary>
     <div class="meth" id="howto"></div>
   </details>
 
-  <details>
+  <details id="dMeth">
     <summary>怎麼算的、以及不能拿它做什麼</summary>
     <div class="meth" id="meth"></div>
   </details>
 </div>
+
+<div id="backdrop"></div>
+<aside class="drawer" id="setts" aria-label="設定" aria-hidden="true">
+  <button class="x" id="settsClose" type="button">關閉</button>
+  <h2>設定</h2>
+  <div class="hint">改這裡只影響你自己的畫面，不會動到資料。</div>
+
+  <div class="ctl"><label for="selBand">顯示區間</label>
+    <div class="why">圖上左右各畫到離現貨多遠。跟資料本身的輸出範圍是兩回事。</div>
+    <select id="selBand">
+      <option value="0.05">±5%</option>
+      <option value="0.10">±10%</option>
+      <option value="0.20" selected>±20%</option>
+    </select></div>
+
+  <div class="ctl"><label for="selBucket">履約價分桶</label>
+    <div class="why">履約價太密時，把相鄰的併成一根比較看得出輪廓。</div>
+    <select id="selBucket">
+      <option value="1" selected>原始履約價</option>
+      <option value="50">50 點</option>
+      <option value="100">100 點</option>
+      <option value="200">200 點</option>
+    </select></div>
+
+  <div class="ctl"><label>造市商假設</label>
+    <div class="why">GEX、VEX、GEX+ 三者共用同一個方向假設。預設「買權多・賣權空」有實證支持。</div>
+    <div class="seg" id="segSign">
+      <button data-v="net" aria-pressed="true">買權多・賣權空</button>
+      <button data-v="gross">兩邊皆空</button>
+    </div></div>
+
+  <div class="ctl"><label for="rngBeta">β</label>
+    <div class="why">標的每動 1%，隱含波動率反向變動幾個波動點。β=0 時 GEX+ 就等於 GEX。</div>
+    <div class="rowin"><input type="range" id="rngBeta" min="0" max="2" step="0.1" value="1"><span class="val" id="valBeta">1.0</span></div></div>
+
+  <div class="ctl"><label>字級</label>
+    <div class="seg" id="segFs">
+      <button data-v="0.88">小</button>
+      <button data-v="1" aria-pressed="true">標準</button>
+      <button data-v="1.15">大</button>
+      <button data-v="1.32">特大</button>
+    </div></div>
+
+  <div class="ctl"><label>色盲友善</label>
+    <div class="seg" id="segCvd">
+      <button data-v="0" aria-pressed="true">綠正紅負</button>
+      <button data-v="1">藍正橘負</button>
+    </div></div>
+</aside>
+
+<div id="pop" role="dialog" aria-label="說明"></div>
 <div id="tip"></div>
 <script src="app.js"></script>
 </body>
