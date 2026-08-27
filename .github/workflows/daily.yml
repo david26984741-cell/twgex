@@ -8,13 +8,17 @@ on:
     # 註：ES（CME）不在這裡。CME 的邊緣節點擋掉 GitHub Actions 的 IP（純 Python 403、
     #     無頭 Chromium 走 HTTP/1.1 逾時），抓資料那一步只能在自己的機器上用瀏覽器做。
     #     流程改成：開 tools/cme.html 抓成 raw/cme_ES.json 上傳 → es.yml 接手建圖。
-    # 台北 20:20 ＝ 美東夏令 08:20 / 冬令 07:20，都在開盤前：抓前一個交易日。
-    # 為什麼不是更晚：GitHub 的排程常延遲 10~60 分鐘，原本排在美東 09:20（開盤前 10 分鐘）
-    # 曾被延到 09:51 才跑，變成「前一日的未平倉 ＋ 當日盤中的報價」，兩者不同時點。
-    # 往前挪一小時是為了留緩衝。此時 OCC 已把未平倉量更新完，
-    # CBOE 的報價也還停在前一個收盤，兩邊指的是同一天。週一到週五各跑一次，抓的都是前一個交易日（OCC 每個營業日早上才發布前一日的未平倉量，
-    # 所以週六跑會拿到過期的 OI；程式會從資料本身推斷 OI 是哪一天的並據此標示）。
-    - cron: '20 12 * * 1-5'
+    # 台北 23:00 ＝ 美東夏令 11:00 / 冬令 10:00，抓前一個交易日的收盤。
+    #
+    # 為什麼是「開盤後」而不是「開盤前」——這一點跟直覺相反，踩過兩次才弄清楚：
+    # CBOE 這份檔案裡，價格是即時的，未平倉量卻要等 OCC 隔天早上才更新（實測美東 10:00~10:30）。
+    # 也就是說，開盤前抓 → 價格對（前一日收盤）但未平倉舊一天；
+    # 等未平倉更新 → 未平倉對了但價格已經變成當日盤中。**沒有任何一個時點兩者同時正確。**
+    # 解法是價格改取每一檔的 prev_day_close（前一交易日收盤價），
+    # 於是只要「未平倉已更新」這一個條件成立就行，而那個窗口一路開到當天收盤，
+    # 有好幾個小時，完全不怕 GitHub 排程延遲。
+    # 底下的「等未平倉更新」那一步會確認條件成立才開始建圖，沒等到就整天不產出。
+    - cron: '0 15 * * 1-5'
   workflow_dispatch:
     inputs:
       symbols:
@@ -49,7 +53,7 @@ jobs:
         run: |
           if [ -n "${{ github.event.inputs.symbols }}" ]; then
             SYMS="${{ github.event.inputs.symbols }}"
-          elif [ "${{ github.event.schedule }}" = "20 12 * * 1-5" ]; then
+          elif [ "${{ github.event.schedule }}" = "0 15 * * 1-5" ]; then
             SYMS="SPX SPY QQQ"
           elif [ -n "${{ github.event.schedule }}" ]; then
             SYMS="TXO"
@@ -58,6 +62,10 @@ jobs:
           fi
           echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
           echo "要更新：$SYMS"
+
+      - name: 等 CBOE 的未平倉量更新到前一個交易日
+        if: contains(steps.pick.outputs.syms, 'SPX') || contains(steps.pick.outputs.syms, 'SPY') || contains(steps.pick.outputs.syms, 'QQQ')
+        run: python wait_oi.py --minutes 150 --every 5
 
       - name: 產生資料
         run: |
