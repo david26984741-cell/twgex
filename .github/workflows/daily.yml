@@ -51,15 +51,20 @@ jobs:
       - name: 決定要跑哪些標的
         id: pick
         run: |
+          # 不要用 github.event.schedule 的字串去比對——2026-08-27 那一輪（#18）證明它會失效：
+          # cron 明明是 '0 15 * * 1-5'，卻掉進 TXO 那個分支，美股整晚沒更新。
+          # 改成看實際的 UTC 時刻，早班／晚班一翻兩瞪眼。
+          H=$(date -u +%-H)
           if [ -n "${{ github.event.inputs.symbols }}" ]; then
             SYMS="${{ github.event.inputs.symbols }}"
-          elif [ "${{ github.event.schedule }}" = "0 15 * * 1-5" ]; then
-            SYMS="SPX SPY QQQ"
-          elif [ -n "${{ github.event.schedule }}" ]; then
-            SYMS="TXO"
-          else
+          elif [ "${{ github.event_name }}" != "schedule" ]; then
             SYMS="TXO SPX SPY QQQ"
+          elif [ "$H" -ge 12 ]; then
+            SYMS="TXO SPX SPY QQQ"    # 晚班：美股為主，順便補台指（同一天已建好就不會重寫）
+          else
+            SYMS="TXO"
           fi
+          echo "事件=${{ github.event_name }}  排程字串='${{ github.event.schedule }}'  UTC 時=$H  選到=$SYMS"
           echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
           echo "要更新：$SYMS"
 
