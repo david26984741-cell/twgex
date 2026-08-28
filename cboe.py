@@ -140,9 +140,24 @@ def snapshot_state(payload: dict) -> dict:
         pass
     lt = (d.get("last_trade_time") or "")[11:16]     # 'HH:MM'
     opened = bool(lt) and lt >= "09:30"
+
+    # 最硬的判準：場次一結束，prev_day_close 就會滾成「剛結束那個場次」的收盤，
+    # 而 current_price（最後一筆成交）本來就等於那個收盤——兩個欄位相等就是已經滾過了。
+    # 盤中則不可能相等（除非當天完全沒動，那種情況下標錯也無害，因為價格根本一樣）。
+    def _f(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    cur, pv = _f(d.get("current_price")), _f(d.get("prev_day_close"))
+    rolled_px = cur is not None and pv is not None and abs(cur - pv) < 1e-9
+    # 日曆換日是第二道訊號（抓檔當下已經是下一個美東日期）
+    rolled_cal = bool(sess and us_date and us_date > sess)
+
     return {"sess": sess, "us_date": us_date, "last_trade_hhmm": lt,
-            "opened": opened,
-            "rolled": bool(sess and us_date and us_date > sess)}
+            "opened": opened, "current_price": cur, "prev_day_close": pv,
+            "rolled_px": rolled_px, "rolled_cal": rolled_cal,
+            "rolled": rolled_px or rolled_cal}
 
 
 def parse_chain(payload: dict, trade_day: Optional[str] = None,

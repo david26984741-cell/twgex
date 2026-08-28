@@ -294,18 +294,24 @@ def cme_tests():
 
     # --- CBOE：prev_day_close 與 last_trade_time 換日時點不同 ---
     import cboe as _cboe
-    snap = lambda ts, lt: _cboe.snapshot_state({"timestamp": ts, "data": {"last_trade_time": lt}})
-    a = snap("2026-08-26 20:10:00", "2026-08-26T16:00:00")
-    check("收盤後當天抓：沒有換日問題",
-          a["sess"] == "20260826" and a["us_date"] == "20260826" and not a["rolled"], str(a))
-    b = snap("2026-08-27 05:45:07", "2026-08-26T16:00:00")
-    check("隔天開盤前抓：認得出 prev_day_close 已經滾到新的一天",
-          b["sess"] == "20260826" and b["us_date"] == "20260827" and b["rolled"],
-          "這就是 2026-08-27 07:55 那次把 08/26 的價格標成 08/25 的成因")
-    c = snap("2026-08-27 15:05:00", "2026-08-27T11:05:00")
-    check("開盤後抓（設計的時點）：一切對齊", not c["rolled"], str(c))
-    d = snap("", "")
-    check("欄位缺漏時不會炸、也不會誤判成換日", d["rolled"] is False, str(d))
+    snap = lambda ts, lt, cur=None, pv=None: _cboe.snapshot_state(
+        {"timestamp": ts, "data": {"last_trade_time": lt,
+                                   "current_price": cur, "prev_day_close": pv}})
+    # 四個都是真實踩過或量過的情境
+    a = snap("2026-08-27 14:33:16", "2026-08-27T10:33:00", 769.07, 766.08)
+    check("盤中抓：prev_day_close 還是前一場次的", not a["rolled"], str(a["rolled_px"]))
+    b = snap("2026-08-27 23:27:47", "2026-08-27T16:14:59", 771.10, 766.08)
+    check("收盤後、還沒滾：仍然算前一場次", not b["rolled"], "這是昨晚建出正確 08/26 的那一輪")
+    c = snap("2026-08-28 03:50:37", "2026-08-27T15:59:59", 771.10, 771.10)
+    check("收盤後、已經滾了：現價＝前收就是滾過了",
+          c["rolled"] and c["rolled_px"] and not c["rolled_cal"],
+          "日曆判準抓不到這個（同一個美東日期），價格判準抓得到")
+    d = snap("2026-08-27 05:45:07", "2026-08-26T16:00:00", 766.08, 766.08)
+    check("跨到隔天、也已經滾了：兩個判準都成立",
+          d["rolled"] and d["rolled_px"] and d["rolled_cal"],
+          "這是 08/27 07:55 那次把 08/26 的價格標成 08/25 的成因")
+    e = snap("", "")
+    check("欄位缺漏時不會炸、也不會誤判成滾過", e["rolled"] is False, str(e["rolled"]))
 
     # --- 抓太早：成交量表還沒發布 ---
     class _A:

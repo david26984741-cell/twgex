@@ -202,13 +202,10 @@ def load_us(args, sym):
         # prev_day_close 是相對「抓檔當下那天」的前一個收盤，不是相對 last_trade_time。
         # 落在「新的一天、還沒開盤」的空窗時，它已經滾到 sess 當天收盤了。
         price_day = sess if st["rolled"] else prev(dt.date(y, m, dd)).strftime("%Y%m%d")
-    if use_prev and st["rolled"] and not args.allow_stale_oi:
-        raise SystemExit(
-            f"  {sym}: 這份檔案是在 {st['us_date']}（美東）開盤前抓的，"
-            f"但場次還停在 {sess}。\n"
-            f"    這個空窗裡 prev_day_close 已經滾到 {sess} 收盤、未平倉卻還沒更新，"
-            f"照抓會產出「新價格 ＋ 舊未平倉」而且日期會標錯一天。\n"
-            f"    等美東開盤（且 OCC 發布未平倉）之後再跑。")
+    if use_prev and st["rolled"]:
+        print(f"  註：{sym} 這份檔案的 prev_day_close 已經滾到 {sess} 收盤"
+              f"（現價 {st['current_price']} ＝ 前收 {st['prev_day_close']}），"
+              f"價格日期按 {sess} 算。", file=sys.stderr)
     oi_day = cboe.oi_as_of(payload, sess or session or "99999999", prev_td=prev)
     forced = oi_day or price_day or session
     chain_all, meta = cboe.parse_chain(
