@@ -88,6 +88,16 @@ jobs:
             echo "::error::全部標的都失敗且沒有任何資料變動"; exit 1
           fi
 
+      # 平行觀察期：OCC 的逐履約價未平倉在交易日當天傍晚就有，CBOE 要隔天早上。
+      # 這一步只讀不寫、也不會讓工作失敗，純粹每天記一份逐檔對照，
+      # 確認兩邊數字一致之後再考慮換來源、把排程往前挪十幾個小時。
+      - name: 對照 OCC 與 CBOE 的未平倉（觀察用，不影響產出）
+        if: always() && (contains(steps.pick.outputs.syms, 'SPX') || contains(steps.pick.outputs.syms, 'SPY') || contains(steps.pick.outputs.syms, 'QQQ'))
+        continue-on-error: true
+        run: |
+          python occ_check.py --symbols SPX SPY QQQ >> "$GITHUB_STEP_SUMMARY" 2>&1 || \
+            echo "（對照步驟自己出錯了，不影響上面的產出）" >> "$GITHUB_STEP_SUMMARY"
+
       - name: 提交
         run: |
           git config user.name  "github-actions[bot]"
