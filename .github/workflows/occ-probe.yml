@@ -1,0 +1,82 @@
+name: OCC 連通性測試（一次性，測完可刪）
+
+# 目的只有一個：確認 GitHub Actions 的機器連不連得到 OCC 的逐履約價未平倉端點。
+# CME 就是擋 Actions 的 IP 才逼我們改走瀏覽器；OCC 如果通，美股三檔的未平倉
+# 就可以改用 OCC（傍晚就有），比 CBOE 那份檔案早十幾個小時。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 打 OCC
+        run: |
+          {
+            echo "## OCC 連通性測試"
+            echo ""
+            echo "跑在 GitHub Actions 的 runner 上，時間 $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo "| 端點 | HTTP | 大小 | 秒 |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          probe () {
+            local name="$1" url="$2"
+            local out
+            out=$(curl -sS -o /tmp/body.txt -w "%{http_code}|%{size_download}|%{time_total}" \
+                  --max-time 60 "$url" 2>/tmp/err.txt) || out="000|0|-"
+            local code size secs
+            IFS='|' read -r code size secs <<< "$out"
+            echo "| $name | $code | $size | $secs |" >> "$GITHUB_STEP_SUMMARY"
+            echo "===== $name -> HTTP $code, $size bytes"
+            head -c 400 /tmp/body.txt | tr -d '\r'
+            echo
+            [ -s /tmp/err.txt ] && { echo "--- curl 訊息："; head -c 300 /tmp/err.txt; echo; }
+            cp /tmp/body.txt "/tmp/$name.txt" 2>/dev/null || true
+          }
+
+          probe occ_root      "https://www.theocc.com/"
+          probe series_SPY    "https://marketdata.theocc.com/series-search?symbolType=U&symbol=SPY"
+          probe series_SPX    "https://marketdata.theocc.com/series-search?symbolType=U&symbol=SPX"
+          probe daily_oi      "https://marketdata.theocc.com/daily-open-interest?reportDate=08%2F27%2F2026&action=download&format=csv"
+
+      - name: 如果 SPY 那支通了，驗它是不是逐履約價、而且是哪一天的
+        if: always()
+        run: |
+          F=/tmp/series_SPY.txt
+          if [ ! -s "$F" ]; then
+            echo "沒有檔案，前一步應該是被擋了" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 - "$F" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import sys
+          rows = []
+          for ln in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              c = ln.rstrip("\n").split("\t")
+              if len(c) > 9 and c[0].strip() == "SPY":
+                  rows.append(c)
+          print("")
+          print("### SPY 逐履約價")
+          print("")
+          print(f"- 可用列數 **{len(rows)}**")
+          tot = sum((int(c[8]) if c[8].strip().isdigit() else 0) +
+                    (int(c[9]) if c[9].strip().isdigit() else 0) for c in rows)
+          print(f"- 未平倉合計 **{tot:,}**（我們 08/26 那份是 19,280,857）")
+          # 拿五個已知的遠月深價外賣權對照
+          want = {("2026","12","18","480"): "08/25:311,290  08/26:311,291",
+                  ("2026","11","20","500"): "08/25:302,809  08/26:302,931",
+                  ("2026","10","16","525"): "08/25:301,537  08/26:301,539",
+                  ("2026","09","30","535"): "08/25:300,907  08/26:300,907",
+                  ("2026","09","18","520"): "08/25:210,005  08/26:210,013"}
+          print("")
+          print("| 合約 | OCC 賣權未平倉 | 我們手上的 |")
+          print("|---|---|---|")
+          for c in rows:
+              k = (c[2].strip(), c[3].strip(), c[4].strip(), c[5].strip())
+              if k in want:
+                  print(f"| {k[0]}-{k[1]}-{k[2]} {k[3]}P | {c[9].strip()} | {want[k]} |")
+          PY
