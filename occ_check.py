@@ -120,6 +120,31 @@ def compare(sym: str) -> None:
         print("|---|---|---|---|---|---|")
         for k in d[:8]:
             print(f"| {k[0]} | {k[1]:g} | {k[2]} | {occ[k]:,} | {cbo[k]:,} | {occ[k]-cbo[k]:+,} |")
+
+    # 換源前唯一還沒回答的問題：OCC 多出來的那些序列到底是什麼，該不該進圖。
+    # 逐檔比對已經是 100%，差額全部來自這裡，所以把它們的長相攤開來看。
+    if occ_only:
+        oo = sorted(occ_only, key=lambda k: -occ[k])
+        by_exp = defaultdict(int)
+        for k in occ_only:
+            by_exp[k[0]] += occ[k]
+        tot_only = sum(occ[k] for k in occ_only)
+        print("")
+        print(f"- **OCC 獨有的 {len(occ_only):,} 個序列，合計 {tot_only:,} 口"
+              f"（佔 OCC 總量 {tot_only / max(tot_occ, 1) * 100:.2f}%）**")
+        print("")
+        print("| 到期 | 履約價 | C/P | 未平倉 |")
+        print("|---|---|---|---|")
+        for k in oo[:10]:
+            print(f"| {k[0]} | {k[1]:g} | {k[2]} | {occ[k]:,} |")
+        print("")
+        top_exp = sorted(by_exp.items(), key=lambda x: -x[1])[:6]
+        print("  依到期日分佈（前 6）：" +
+              "、".join(f"{e} {v:,} 口" for e, v in top_exp))
+        # 履約價有沒有落在正常的整數／半數格線上——不是的話多半是公司行為調整過的序列
+        odd = [k for k in occ_only if abs(k[1] * 2 - round(k[1] * 2)) > 1e-6]
+        print(f"  履約價不在 0.5 整數格上的：{len(odd):,} 個"
+              f"（這種通常是公司行為調整過的序列，本來就不該進圖）")
     print("")
 
 
