@@ -22,7 +22,9 @@ on:
   workflow_dispatch:
     inputs:
       symbols:
-        description: '要更新的標的（空白 = 全部）'
+        # 2026/08/30 踩過：以為留空只會跑台指，結果跑了全部四檔，
+        # 撞上「等 CBOE 未平倉」那一步，週六空轉了 17 分鐘才被取消。
+        description: '要更新的標的。留空 = 全部四檔（TXO SPX SPY QQQ）；只要台指請填 TXO'
         required: false
         default: ''
       oi_source:
