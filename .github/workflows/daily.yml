@@ -25,6 +25,12 @@ on:
         description: '要更新的標的（空白 = 全部）'
         required: false
         default: ''
+      oi_source:
+        description: '美股未平倉來源（occ ＝ 直接向 OCC 拿，比 CBOE 早十幾個小時）'
+        required: false
+        default: 'cboe'
+        type: choice
+        options: ['cboe', 'occ']
 
 permissions:
   contents: write
@@ -64,22 +70,36 @@ jobs:
           else
             SYMS="TXO"
           fi
-          echo "事件=${{ github.event_name }}  排程字串='${{ github.event.schedule }}'  UTC 時=$H  選到=$SYMS"
+          # 未平倉來源。OCC 在交易日當天傍晚（美東約 20:00）就發布逐序列未平倉，
+          # CBOE 這份 delayed_quotes 檔要隔天早上（美東 10:00~10:30）才吃進去。
+          # 目前預設仍走 CBOE；手動 dispatch 時可以選 occ 做平行驗證。
+          SRC="${{ github.event.inputs.oi_source }}"
+          [ -n "$SRC" ] || SRC=cboe
+          echo "事件=${{ github.event_name }}  排程字串='${{ github.event.schedule }}'  UTC 時=$H  選到=$SYMS  未平倉來源=$SRC"
           echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
-          echo "要更新：$SYMS"
+          echo "oi_source=$SRC" >> "$GITHUB_OUTPUT"
+          echo "要更新：$SYMS（未平倉來源 $SRC）"
 
+      # 走 OCC 就不需要等 CBOE——那正是換來源的重點：OCC 早就發布了。
       - name: 等 CBOE 的未平倉量更新到前一個交易日
-        if: contains(steps.pick.outputs.syms, 'SPX') || contains(steps.pick.outputs.syms, 'SPY') || contains(steps.pick.outputs.syms, 'QQQ')
+        if: steps.pick.outputs.oi_source != 'occ' && (contains(steps.pick.outputs.syms, 'SPX') || contains(steps.pick.outputs.syms, 'SPY') || contains(steps.pick.outputs.syms, 'QQQ'))
         run: python wait_oi.py --minutes 150 --every 5
 
       - name: 產生資料
         run: |
           fail=0
+          # 未平倉來源只對美股三檔有意義：台指走期交所，ES 走 CME，兩邊都不經過 OCC。
+          OIARG=""
+          # 注意：這裡不能寫成 `[ ... ] && OIARG=...`——Actions 的 shell 帶 -e，
+          # 條件不成立時整串回傳 1，整個步驟會當場失敗。
+          if [ "${{ steps.pick.outputs.oi_source }}" = "occ" ]; then OIARG="--oi-source occ"; fi
           for s in ${{ steps.pick.outputs.syms }}; do
             echo "::group::$s"
+            A=""
+            case "$s" in SPX|SPY|QQQ) A="$OIARG";; esac
             if [ "$s" = "ES" ]; then
               echo "::warning::ES 不從這裡抓（CME 擋 Actions 的 IP），請用 tools/cme.html"
-            elif python build.py --symbol "$s"; then :; else
+            elif python build.py --symbol "$s" $A; then :; else
               echo "::warning::$s 更新失敗（來源可能暫時不可用）"; fail=1
             fi
             echo "::endgroup::"
