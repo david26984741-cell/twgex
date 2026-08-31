@@ -249,8 +249,9 @@ def load_us(args, sym):
             # OCC 跟 CBOE 逐檔一模一樣 → OCC 還沒往前走，兩邊是同一天。
             # 此時 OCC 沒有任何好處，日期就以 CBOE 自己的判斷為準，交給下面的對齊檢查去擋。
             oi_day = cboe_oi_day
-            occ_note = (f"{sym}: OCC 與 CBOE 的未平倉逐檔完全相同，代表 OCC 還沒發布新的一天，"
-                        f"這一輪等於沒有提前。")
+            occ_note = (f"{sym}: OCC 與 CBOE 的未平倉在共同合約上逐檔完全相同，"
+                        f"這一輪沒有比 CBOE 提前（可能是 CBOE 已經跟上，"
+                        f"也可能是 OCC 當天還沒發布）；日期以 CBOE 的判斷為準。")
         else:
             # 不一樣 → OCC 比 CBOE 新一個發布週期。CBOE 的未平倉日期若測得出來，
             # OCC 就是它的下一個交易日；測不出來（SPX 不留已到期序列）才退回 price_day。
