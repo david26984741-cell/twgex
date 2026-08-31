@@ -22,75 +22,29 @@ CBOE 的 delayed_quotes 檔卻要**隔天早上**（美東 10:00~10:30）才跟�
 from __future__ import annotations
 
 import argparse
-import sys
-import urllib.request
+
 from collections import defaultdict
-from typing import Dict, Tuple
-
-OCC = "https://marketdata.theocc.com/series-search?symbolType=U&symbol={sym}"
-UA = "Mozilla/5.0 (compatible; twgex/1.0)"
-
-# 每個標的要留哪些根碼。開頭是數字的（2SPX、4QQQ…）是公司行為調整過的序列，
-# 履約價與乘數都不一樣，本來就不進圖，這裡也一律排除。
-ROOTS = {"SPX": ("SPX", "SPXW"), "SPY": ("SPY",), "QQQ": ("QQQ",)}
 
 
-def fetch_occ(sym: str, timeout: int = 120) -> str:
-    req = urllib.request.Request(OCC.format(sym=sym), headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "replace")
-
-
-def parse_occ(text: str, keep: Tuple[str, ...]) -> Dict[Tuple[str, float, str], int]:
-    """欄位：0 根碼 1 空 2 年 3 月 4 日 5 履約價整數 6 小數 7 C/P 8 買權OI 9 賣權OI 10 部位限額
-
-    注意根碼後面有兩個 tab，欄位很容易整排錯開一格——這裡用欄數與內容再確認一次。
-    """
-    out: Dict[Tuple[str, float, str], int] = {}
-    for ln in text.split("\n"):
-        c = ln.rstrip("\n").split("\t")
-        if len(c) < 10:
-            continue
-        root = c[0].strip()
-        if root not in keep:
-            continue
-        y, m, d = c[2].strip(), c[3].strip(), c[4].strip()
-        if not (y.isdigit() and m.isdigit() and d.isdigit()):
-            continue
-        whole, dec = c[5].strip(), c[6].strip()
-        if not whole.isdigit():
-            continue
-        K = int(whole) + (int(dec) / 1000.0 if dec.isdigit() else 0.0)
-        exp = f"{y}{m.zfill(2)}{d.zfill(2)}"
-        for cp, col in (("C", 8), ("P", 9)):
-            v = c[col].strip()
-            if v.isdigit():
-                out[(exp, round(K, 3), cp)] = int(v)
-    return out
-
-
-def parse_cboe(payload: dict) -> Dict[Tuple[str, float, str], int]:
-    out: Dict[Tuple[str, float, str], int] = {}
-    for o in (payload.get("data") or {}).get("options") or []:
-        code = o.get("option") or ""
-        if len(code) < 16:
-            continue
-        exp = "20" + code[-15:-9]
-        cp = code[-9]
-        K = int(code[-8:]) / 1000.0
-        out[(exp, round(K, 3), cp)] = int(o.get("open_interest") or 0)
-    return out
+# 解析與抓取都用 occ.py 那一份，避免兩邊各寫一次、日後改一邊忘一邊。
+# key = (根碼, 到期, C/P, 履約價×1000)。**根碼一定要放進 key**：
+# SPX（AM 結算）與 SPXW（PM 結算）在每月第三個星期五會撞在同一個到期日、
+# 履約價還大量重疊，key 裡少了根碼的話兩邊各自會被後讀到的那一批蓋掉，
+# 比對出來的「100% 相同」是假的。
 
 
 def compare(sym: str) -> None:
     import cboe
+    import occ as occ_src
 
-    keep = ROOTS.get(sym, (sym,))
-    occ = parse_occ(fetch_occ(sym), keep)
-    cbo = parse_cboe(cboe.fetch_json("_SPX" if sym == "SPX" else sym))
+    occ = occ_src.fetch_oi(sym)
+    payload = cboe.fetch_json("_SPX" if sym == "SPX" else sym)
+    keep = occ_src.ROOTS.get(sym, (sym,))
+    # CBOE 那邊也只留同樣的根碼，不然公司行為調整過的序列（2SPX、SPY1…）
+    # 會被算成「CBOE 獨有」，看起來像對不上。
+    cbo = {k: v for k, v in occ_src.cboe_oi_map(payload).items() if k[0] in keep}
 
     both = set(occ) & set(cbo)
-    same = [k for k in both if occ[k] == cbo[k]]
     diff = [k for k in both if occ[k] != cbo[k]]
     # 只看有部位的：0 對 0 沒有資訊量
     live = [k for k in both if occ[k] > 0 or cbo[k] > 0]
@@ -116,10 +70,11 @@ def compare(sym: str) -> None:
         print("")
         print(f"- 逐檔不同的有 **{len(diff):,}** 個，差距最大的前 8 個：")
         print("")
-        print("| 到期 | 履約價 | C/P | OCC | CBOE | 差 |")
-        print("|---|---|---|---|---|---|")
+        print("| 根碼 | 到期 | C/P | 履約價 | OCC | CBOE | 差 |")
+        print("|---|---|---|---|---|---|---|")
         for k in d[:8]:
-            print(f"| {k[0]} | {k[1]:g} | {k[2]} | {occ[k]:,} | {cbo[k]:,} | {occ[k]-cbo[k]:+,} |")
+            print(f"| {k[0]} | {k[1]} | {k[2]} | {k[3]/1000:g} | "
+                  f"{occ[k]:,} | {cbo[k]:,} | {occ[k]-cbo[k]:+,} |")
 
     # 換源前唯一還沒回答的問題：OCC 多出來的那些序列到底是什麼，該不該進圖。
     # 逐檔比對已經是 100%，差額全部來自這裡，所以把它們的長相攤開來看。
@@ -127,24 +82,28 @@ def compare(sym: str) -> None:
         oo = sorted(occ_only, key=lambda k: -occ[k])
         by_exp = defaultdict(int)
         for k in occ_only:
-            by_exp[k[0]] += occ[k]
+            by_exp[k[1]] += occ[k]
         tot_only = sum(occ[k] for k in occ_only)
         print("")
         print(f"- **OCC 獨有的 {len(occ_only):,} 個序列，合計 {tot_only:,} 口"
               f"（佔 OCC 總量 {tot_only / max(tot_occ, 1) * 100:.2f}%）**")
         print("")
-        print("| 到期 | 履約價 | C/P | 未平倉 |")
-        print("|---|---|---|---|")
+        print("| 根碼 | 到期 | C/P | 履約價 | 未平倉 |")
+        print("|---|---|---|---|---|")
         for k in oo[:10]:
-            print(f"| {k[0]} | {k[1]:g} | {k[2]} | {occ[k]:,} |")
+            print(f"| {k[0]} | {k[1]} | {k[2]} | {k[3]/1000:g} | {occ[k]:,} |")
         print("")
         top_exp = sorted(by_exp.items(), key=lambda x: -x[1])[:6]
         print("  依到期日分佈（前 6）：" +
               "、".join(f"{e} {v:,} 口" for e, v in top_exp))
         # 履約價有沒有落在正常的整數／半數格線上——不是的話多半是公司行為調整過的序列
-        odd = [k for k in occ_only if abs(k[1] * 2 - round(k[1] * 2)) > 1e-6]
+        odd = [k for k in occ_only if k[3] % 500 != 0]
         print(f"  履約價不在 0.5 整數格上的：{len(odd):,} 個"
-              f"（這種通常是公司行為調整過的序列，本來就不該進圖）")
+              f"（這種通常是公司行為調整過的序列）")
+        print("")
+        print("  **這些序列進不了圖，而且不是選擇——CBOE 那份檔案根本沒有列它們，"
+              "就沒有報價，沒有報價就反解不出 IV、算不出 gamma。**"
+              "換不換來源都一樣，所以它們不構成換源的阻礙。")
     print("")
 
 

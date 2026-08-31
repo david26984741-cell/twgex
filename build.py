@@ -206,21 +206,77 @@ def load_us(args, sym):
         print(f"  註：{sym} 這份檔案的 prev_day_close 已經滾到 {sess} 收盤"
               f"（現價 {st['current_price']} ＝ 前收 {st['prev_day_close']}），"
               f"價格日期按 {sess} 算。", file=sys.stderr)
-    oi_day = cboe.oi_as_of(payload, sess or session or "99999999", prev_td=prev)
+    cboe_oi_day = cboe.oi_as_of(payload, sess or session or "99999999", prev_td=prev)
+
+    # ── 未平倉來源 ───────────────────────────────────────────────────────────
+    # 預設仍是 CBOE 那份檔案自己的 open_interest。
+    # --oi-source occ 改成直接向 OCC 拿：OCC 在交易日**當天傍晚**（美東約 20:00）
+    # 就發布逐序列未平倉，CBOE 要**隔天早上**（美東 10:00~10:30）才吃進去。
+    oi_override = None
+    oi_day = cboe_oi_day
+    occ_note = None
+    if getattr(args, "oi_source", "cboe") == "occ":
+        import occ as occ_src
+        _osym = spec0.get("cboe_symbol", sym).lstrip("_")
+        if getattr(args, "occ_txt", None):
+            with open(args.occ_txt, encoding="utf-8") as _fh:
+                oi_override = occ_src.parse_series(_fh.read(), occ_src.ROOTS.get(_osym, (_osym,)))
+        else:
+            oi_override = occ_src.fetch_oi(_osym)
+        if not oi_override:
+            raise SystemExit(f"  {sym}: OCC 沒回傳任何序列，先不要產出")
+        # 這批 OCC 是哪一個交易日的？OCC 自己沒有日期欄位，用兩道獨立的判斷夾出來。
+        #
+        # 危險的只有一個時段：美東當天 16:00~20:00（收盤了、OCC 還沒發布）。
+        # 那時 prev_day_close 已經滾成當天收盤（price_day = 今天），
+        # 但 OCC 還停在昨天——正好是我們最怕的拼裝圖。
+        probe = (None if getattr(args, "occ_txt", None)
+                 else occ_src.published_for(price_day))
+        same = occ_src.same_numbers(oi_override, occ_src.cboe_oi_map(payload))
+        if probe is False:
+            msg = (f"{sym}: OCC 還沒發布 {price_day} 的未平倉（美東當天 20:00 左右才會有）。\n"
+                   f"    現在拿到的是前一個交易日的，配上 {price_day} 的價格會變成拼裝圖。")
+            if not args.allow_stale_oi:
+                raise SystemExit("  " + msg)
+            print("  警告：" + msg, file=sys.stderr)
+        if same:
+            # OCC 跟 CBOE 逐檔一模一樣 → OCC 還沒往前走，兩邊是同一天。
+            # 此時 OCC 沒有任何好處，日期就以 CBOE 自己的判斷為準，交給下面的對齊檢查去擋。
+            oi_day = cboe_oi_day
+            occ_note = (f"{sym}: OCC 與 CBOE 的未平倉逐檔完全相同，代表 OCC 還沒發布新的一天，"
+                        f"這一輪等於沒有提前。")
+        else:
+            # 不一樣 → OCC 比 CBOE 新一個發布週期。CBOE 的未平倉日期若測得出來，
+            # OCC 就是它的下一個交易日；測不出來（SPX 不留已到期序列）才退回 price_day。
+            oi_day = (occ_src.next_trading_day(cboe_oi_day, hol)
+                      if cboe_oi_day else price_day)
+            occ_note = (f"{sym}: 未平倉改用 OCC（{len(oi_override):,} 個序列）"
+                        f"；CBOE 那份還停在 {cboe_oi_day or '不明'}，OCC 已經是 {oi_day}。")
+    if occ_note:
+        print("  " + occ_note, file=sys.stderr)
+
     forced = oi_day or price_day or session
     chain_all, meta = cboe.parse_chain(
         payload, forced, am_roots=spec0.get("am_roots", ()),
-        prev_td=prev, use_prev_close=use_prev)
+        prev_td=prev, use_prev_close=use_prev, oi_override=oi_override)
     meta["price_day"] = price_day
+    if oi_override is not None and meta.get("n_oi_lost"):
+        print(f"  註：{sym} 有 {meta['n_oi_lost']:,} 個合約 CBOE 有部位但 OCC 查不到"
+              f"（2026/08/28 逐檔實測應該是 0，數字不對就要看一眼）。", file=sys.stderr)
     day = forced or meta["trade_day"]
     if not day:
         raise SystemExit("CBOE 回傳裡找不到交易日")
 
     # 對齊檢查：未平倉與價格必須是同一個交易日，不然畫出來的是拼裝圖
     if oi_day and price_day and oi_day != price_day:
+        why = ("這通常表示抓得太早：OCC 在交易日當天傍晚（美東約 20:00）就發布未平倉，"
+               "CBOE 這份檔案要隔天早上才吃進去。"
+               if oi_override is None else
+               "OCC 的未平倉比 CBOE 的價格新。正常情況不會發生，"
+               "多半是 CBOE 那份檔案停更或 prev_day_close 還沒滾。")
         msg = (f"{sym}: 未平倉量是 {oi_day} 收盤、價格是 {price_day} 收盤，兩者不同日。\n"
-               f"    這通常表示抓得太早（OCC 大約在美東 10:00~10:30 才把前一日的未平倉發布出來）。\n"
-               f"    等未平倉更新後再跑一次即可；要強行產出請加 --allow-stale-oi。")
+               f"    {why}\n"
+               f"    等兩邊對齊後再跑一次即可；要強行產出請加 --allow-stale-oi。")
         if not args.allow_stale_oi:
             raise SystemExit("  " + msg)
         print("  警告：" + msg, file=sys.stderr)
@@ -245,7 +301,8 @@ def load_us(args, sym):
              "snapshot_at": meta.get("quote_time"), "snapshot": meta.get("snapshot"),
              "iv30": meta.get("iv30"), "n_contracts_all": meta.get("n_contracts_all"),
              "price_basis": meta.get("price_basis"), "session_day": fmt_date(sess),
-             "oi_as_of": fmt_date(oi_day or price_day), "price_as_of": fmt_date(price_day)}
+             "oi_as_of": fmt_date(oi_day or price_day), "price_as_of": fmt_date(price_day),
+             "oi_source": meta.get("oi_source"), "n_oi_lost": meta.get("n_oi_lost")}
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 
@@ -321,6 +378,11 @@ def main() -> int:
                     help="美股：用當下的買賣中價而不是前一交易日收盤（只適合盤中看即時結構）")
     ap.add_argument("--allow-stale-oi", action="store_true",
                     help="美股：未平倉與價格不同日也照樣產出；ES：未平倉退回前一日也照樣產出")
+    ap.add_argument("--oi-source", choices=("cboe", "occ"), default="cboe",
+                    help="美股未平倉來源。occ ＝ 直接向 OCC 拿逐序列未平倉，"
+                         "比 CBOE 那份檔案早十幾個小時（跨週末 2.5 天）；價格仍取 CBOE")
+    ap.add_argument("--occ-txt",
+                    help="離線測試用：改讀存好的 series-search 純文字，不連 OCC")
     args = ap.parse_args()
 
     sym = args.symbol

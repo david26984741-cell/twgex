@@ -402,6 +402,63 @@ def oi_delta_tests():
           r["dc"] == r["oc"] and r["dp"] == r["op"])
 
 
+
+def occ_tests():
+    """OCC 當未平倉來源。
+
+    OCC 在交易日**當天傍晚**（美東約 20:00）就發布逐序列未平倉，CBOE 那份檔案要
+    **隔天早上**（美東 10:00~10:30）才吃進去。平日差十幾個小時、跨週末差 2.5 天。
+    這裡守住三件事：欄位不會錯開、根碼不會互相覆蓋、以及最重要的——
+    「OCC 還沒發布新的一天」時不能默默產出拼裝圖。
+    """
+    import occ
+
+    def row(root, exp, whole, dec, c, p):
+        # 真實檔案在根碼後面是**兩個** tab，欄位很容易整排錯開一格（踩過一次）
+        return (f"{root}\t\t{exp[:4]}\t{int(exp[4:6])}\t{int(exp[6:8])}\t"
+                f"{whole}\t{dec}\tC\t{c}\t{p}\t250000")
+
+    txt = "\n".join([
+        row("SPX", "20260918", 7000, 0, 111, 222),
+        row("SPXW", "20260918", 7000, 0, 333, 444),      # 同到期同履約價，AM/PM 都在
+        row("SPY", "20260918", 533, 330, 10, 20),        # 不在 0.5 格上的履約價
+        row("2SPX", "20260918", 7000, 0, 9, 9),          # 公司行為調整過的根碼
+    ])
+
+    m = occ.parse_series(txt, occ.ROOTS["SPX"])
+    check("OCC：AM 與 PM 不會互相覆蓋",
+          m.get(("SPX", "20260918", "C", 7000000)) == 111
+          and m.get(("SPXW", "20260918", "C", 7000000)) == 333,
+          "第三個星期五 SPX 與 SPXW 撞在同一個到期日、履約價還大量重疊，"
+          "key 少了根碼的話比對出來的『100% 相同』是假的")
+    check("OCC：買權與賣權分別讀到 8 / 9 欄",
+          m.get(("SPX", "20260918", "P", 7000000)) == 222)
+    check("OCC：公司行為調整過的根碼被排除", ("2SPX", "20260918", "C", 7000000) not in m)
+
+    ksp = occ.parse_series(txt, occ.ROOTS["SPY"])
+    check("OCC：履約價用整數千分位，小數不會走位",
+          ksp.get(("SPY", "20260918", "C", 533330)) == 10,
+          "533.33 在 533330/1000.0 與 533+330/1000.0 兩種算法下不保證是同一個 float")
+
+    bad = txt.replace("SPX\t\t", "SPX\t")
+    check("OCC：欄位錯開一格時整列被擋掉，不是照收",
+          ("SPX", "20260918", "C", 7000000) not in occ.parse_series(bad, occ.ROOTS["SPX"]),
+          "讀成 7/8 欄的話 SPY 的數字會從 311,301 變成 204")
+
+    a = {("SPY", "20260918", "C", 533000): 10, ("SPY", "20260918", "P", 533000): 20}
+    check("OCC：逐檔一樣時 same_numbers 回 True", occ.same_numbers(a, dict(a)) is True,
+          "一樣就代表 OCC 還沒往前走，這一輪沒有提前，日期要以 CBOE 的判斷為準")
+    b = dict(a); b[("SPY", "20260918", "C", 533000)] = 11
+    check("OCC：有一檔不同就回 False", occ.same_numbers(a, b) is False)
+    check("OCC：完全沒有重疊時回 False（當成不可信）",
+          occ.same_numbers(a, {("QQQ", "20260918", "C", 1): 1}) is False)
+
+    hol = set()
+    check("OCC：next_trading_day 會跳過週末",
+          occ.next_trading_day("20260828", hol) == "20260831",
+          "2026/08/28 是週五，下一個交易日是 08/31")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
@@ -414,6 +471,8 @@ def main():
     cme_tests()
     print()
     oi_delta_tests()
+    print()
+    occ_tests()
     if a.csv:
         print()
         data_tests(a.csv, a.date)

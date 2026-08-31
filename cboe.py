@@ -162,7 +162,8 @@ def snapshot_state(payload: dict) -> dict:
 
 def parse_chain(payload: dict, trade_day: Optional[str] = None,
                 am_roots: tuple = (), prev_td=None,
-                use_prev_close: bool = False) -> Tuple[Dict[str, dict], dict]:
+                use_prev_close: bool = False,
+                oi_override: Optional[dict] = None) -> Tuple[Dict[str, dict], dict]:
     """回傳 (chain, meta)。chain 的結構跟 taifex.parse_options 的單日區塊一致，
     可以直接餵給 engine.build_legs。
 
@@ -185,6 +186,12 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
       價格與未平倉就都是同一個交易日的收盤，而且完全不怕排程延遲。
       實測 SPY 2026/08/26：9,913 檔有未平倉的合約全部都有 prev_day_close，一檔不漏；
       用它反解的 parity 遠期與標的前一日收盤只差 0.03~0.06%。
+
+    oi_override: 給 {(根碼, 到期, C/P, 履約價×1000): 未平倉} 就改用它，不看檔案裡的
+      open_interest。用途是把未平倉來源換成 OCC——OCC 在交易日**當天傍晚**就發布，
+      CBOE 這份檔案要**隔天早上**才吃進去，平日差十幾個小時、跨週末差 2.5 天。
+      查不到的合約一律當 0（等於不進圖）。價格仍然全部取自這份 CBOE 檔案，
+      所以 OCC 有、CBOE 沒列的序列本來就沒有報價，算不出 IV 與 gamma，進不了圖。
     """
     def _prev(d):
         if prev_td:
@@ -202,13 +209,19 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
     day = trade_day or (d.get("last_trade_time") or "")[:10].replace("-", "")
 
     chain: Dict[str, dict] = {}
-    n_all = n_used = n_noprice = 0
+    n_all = n_used = n_noprice = n_oi_lost = 0
     for o in d.get("options") or []:
         code = o.get("option") or ""
         if len(code) < 16:
             continue
         exp, cp, K = parse_osi(code)
-        oi = int(o.get("open_interest") or 0)
+        root = osi_root(code)
+        if oi_override is None:
+            oi = int(o.get("open_interest") or 0)
+        else:
+            oi = int(oi_override.get((root, exp, cp, int(code[-8:])), 0))
+            if oi <= 0 and int(o.get("open_interest") or 0) > 0:
+                n_oi_lost += 1
         n_all += 1
         if oi <= 0:
             continue
@@ -222,7 +235,7 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
             continue
         y, m, dd = int(exp[:4]), int(exp[4:6]), int(exp[6:8])
         exp_date = dt.date(y, m, dd)
-        am = osi_root(code) in am_roots
+        am = root in am_roots
         key = exp + "A" if am else exp
         blk = chain.setdefault(key, {"ltd": _prev(exp_date) if am else exp_date,
                                      "kind": expiry_kind(exp_date) + ("・AM 結算" if am else ""),
@@ -240,7 +253,11 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
             "price_basis": "prev_close" if use_prev_close else "mid",
             "quote_time": d.get("last_trade_time"), "snapshot": payload.get("timestamp"),
             "iv30": d.get("iv30"), "n_contracts_all": n_all, "n_contracts_used": n_used,
-            "n_no_price": n_noprice}
+            "n_no_price": n_noprice,
+            "oi_source": "CBOE" if oi_override is None else "OCC",
+            # CBOE 檔案裡有部位、OCC 卻查不到的合約數。理應是 0
+            # （2026/08/28 逐檔實測 SPX/SPY/QQQ 都是 0），不是 0 就要看一眼。
+            "n_oi_lost": n_oi_lost}
     return chain, meta
 
 
