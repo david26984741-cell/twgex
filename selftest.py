@@ -440,10 +440,19 @@ def occ_tests():
           ksp.get(("SPY", "20260918", "C", 533330)) == 10,
           "533.33 在 533330/1000.0 與 533+330/1000.0 兩種算法下不保證是同一個 float")
 
-    bad = txt.replace("SPX\t\t", "SPX\t")
-    check("OCC：欄位錯開一格時整列被擋掉，不是照收",
-          ("SPX", "20260918", "C", 7000000) not in occ.parse_series(bad, occ.ROOTS["SPX"]),
-          "讀成 7/8 欄的話 SPY 的數字會從 311,301 變成 204")
+    one_tab = txt.replace("SPX\t\t", "SPX\t").replace("SPXW\t\t", "SPXW\t")
+    check("OCC：根碼後面一個或兩個 tab 都讀得對",
+          occ.parse_series(one_tab, occ.ROOTS["SPX"]).get(("SPX", "20260918", "C", 7000000)) == 111,
+          "欄位位置用推的（跳過根碼後面的空欄），不寫死第幾欄；"
+          "寫死過一次，OCC 的旗標跟我猜的不一樣，整份被濾成 0 筆")
+    check("OCC：未平倉不是數字的列會整列跳過，不會讀到隔壁格",
+          occ.parse_series("SPY\t\t2026\t9\t18\t533\t330\tC\tabc\t20\t250000",
+                           occ.ROOTS["SPY"]) == {})
+    check("OCC：欄位數不足的列跳過",
+          occ.parse_series("SPY\t\t2026\t9\t18\t533\t330\tC\t10", occ.ROOTS["SPY"]) == {})
+    check("OCC：年月日不合理的列跳過",
+          occ.parse_series("SPY\t\t2026\t99\t18\t533\t330\tC\t10\t20\t250000",
+                           occ.ROOTS["SPY"]) == {})
 
     a = {("SPY", "20260918", "C", 533000): 10, ("SPY", "20260918", "P", 533000): 20}
     check("OCC：逐檔一樣時 same_numbers 回 True", occ.same_numbers(a, dict(a)) is True,

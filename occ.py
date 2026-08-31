@@ -64,6 +64,15 @@ def fetch_series(sym: str, timeout: int = 120) -> str:
 def parse_series(text: str, keep: Tuple[str, ...] = ()) -> Dict[Key, int]:
     """把 series-search 的純文字解析成 {(根碼, 到期, C/P, 履約價×1000): 未平倉}。
 
+    **欄位位置用推的，不要寫死。** 這份檔案在根碼後面塞了不只一個 tab，
+    寫死成「第 2 欄是年」的話只要 OCC 改了 tab 數量就整份解析成 0 筆——
+    2026/08/30 就這樣踩了一次（我另外還寫死了「第 7 欄一定是 C/P」，
+    結果真實檔案的旗標不是我猜的那幾個字，整份被濾光）。
+    現在改成：跳過根碼後面所有的空欄，找到第一個非空欄當「年」，其餘依序往後數：
+        年 月 日 履約價整數 履約價小數(千分位) 旗標 買權未平倉 賣權未平倉
+    再用「年月日與履約價必須是數字、兩個未平倉必須是數字」把整列驗一次。
+    這樣不管根碼後面是一個還是兩個 tab 都讀得對，欄位真的變了也會整列跳過而不是讀錯格。
+
     keep 給空的就全留（含公司行為調整過的根碼）。
     """
     out: Dict[Key, int] = {}
@@ -72,22 +81,26 @@ def parse_series(text: str, keep: Tuple[str, ...] = ()) -> Dict[Key, int]:
         if len(c) < 10:
             continue
         root = c[0].strip()
-        if keep and root not in keep:
+        if not root or (keep and root not in keep):
             continue
-        y, m, d = c[2].strip(), c[3].strip(), c[4].strip()
-        whole, dec = c[5].strip(), c[6].strip()
-        flag = c[7].strip().upper()
-        # 欄位錯位的防呆：第 7 欄一定是 C/P 旗標，日期與履約價一定是數字
+        i = 1
+        while i < len(c) and not c[i].strip():
+            i += 1
+        if i + 7 >= len(c) + 1 or i + 7 > len(c) - 1:
+            continue
+        y, m, d = c[i].strip(), c[i + 1].strip(), c[i + 2].strip()
+        whole, dec = c[i + 3].strip(), c[i + 4].strip()
+        oi_c, oi_p = c[i + 6].strip(), c[i + 7].strip()
         if not (y.isdigit() and m.isdigit() and d.isdigit() and whole.isdigit()):
             continue
-        if flag not in ("C", "P", "B", ""):
+        if not (oi_c.isdigit() and oi_p.isdigit()):
             continue
-        exp = f"{y}{m.zfill(2)}{d.zfill(2)}"
+        if not (1900 < int(y) < 2200 and 1 <= int(m) <= 12 and 1 <= int(d) <= 31):
+            continue
+        exp = f"{int(y):04d}{int(m):02d}{int(d):02d}"
         k_milli = int(whole) * 1000 + (int(dec) if dec.isdigit() else 0)
-        for cp, col in (("C", 8), ("P", 9)):
-            v = c[col].strip()
-            if v.isdigit():
-                out[(root, exp, cp, k_milli)] = int(v)
+        out[(root, exp, "C", k_milli)] = int(oi_c)
+        out[(root, exp, "P", k_milli)] = int(oi_p)
     return out
 
 
@@ -153,3 +166,19 @@ def next_trading_day(day: str, holidays) -> str:
     while d.weekday() >= 5 or d in holidays:
         d += dt.timedelta(days=1)
     return d.strftime("%Y%m%d")
+
+
+def format_sample(text: str, n: int = 3) -> str:
+    """把回傳內容的前幾列攤開來看，tab 用 <TAB> 標出來。
+
+    OCC 這份檔案沒有欄位標頭，欄位位置全靠觀察，出錯時第一件事就是看原始長相。
+    """
+    lines = [ln for ln in text.split("\n") if ln.strip()][:n]
+    out = [f"回傳長度 {len(text):,} 字元、非空白列 {len([1 for ln in text.split(chr(10)) if ln.strip()]):,}"]
+    for i, ln in enumerate(lines):
+        cols = ln.rstrip("\r\n").split("\t")
+        out.append(f"  第 {i+1} 列（{len(cols)} 欄）：" + ln.rstrip("\r\n").replace("\t", "<TAB>")[:300])
+        out.append("      " + " | ".join(f"[{j}]{v.strip()!r}" for j, v in enumerate(cols[:12])))
+    if not lines:
+        out.append("  （沒有任何非空白列，前 300 字元：" + repr(text[:300]) + "）")
+    return "\n".join(out)

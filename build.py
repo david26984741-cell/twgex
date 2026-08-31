@@ -224,7 +224,13 @@ def load_us(args, sym):
         else:
             oi_override = occ_src.fetch_oi(_osym)
         if not oi_override:
-            raise SystemExit(f"  {sym}: OCC 沒回傳任何序列，先不要產出")
+            # 解析不出東西時，把原始長相印出來——這份檔案沒有欄位標頭，
+            # 光看「0 筆」分不出是 OCC 沒給還是我們讀錯格。
+            try:
+                sample = occ_src.format_sample(occ_src.fetch_series(_osym))
+            except Exception as _e:                              # noqa: BLE001
+                sample = f"（連原始內容都拿不到：{type(_e).__name__}: {_e}）"
+            raise SystemExit(f"  {sym}: OCC 沒回傳任何可用序列，先不要產出。\n{sample}")
         # 這批 OCC 是哪一個交易日的？OCC 自己沒有日期欄位，用兩道獨立的判斷夾出來。
         #
         # 危險的只有一個時段：美東當天 16:00~20:00（收盤了、OCC 還沒發布）。

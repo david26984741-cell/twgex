@@ -37,9 +37,19 @@ def compare(sym: str) -> None:
     import cboe
     import occ as occ_src
 
-    occ = occ_src.fetch_oi(sym)
-    payload = cboe.fetch_json("_SPX" if sym == "SPX" else sym)
     keep = occ_src.ROOTS.get(sym, (sym,))
+    raw = occ_src.fetch_series(sym)
+    occ = occ_src.parse_series(raw, keep)
+    if not occ:
+        # 解析不出東西的時候，把原始長相印出來——這份檔案沒有欄位標頭，
+        # 欄位位置全靠觀察，猜第二次不如直接看一眼。
+        print(f"### {sym}（解析結果是空的，以下是原始回傳）")
+        print("")
+        print("```")
+        print(occ_src.format_sample(raw))
+        print("```")
+        print("")
+    payload = cboe.fetch_json("_SPX" if sym == "SPX" else sym)
     # CBOE 那邊也只留同樣的根碼，不然公司行為調整過的序列（2SPX、SPY1…）
     # 會被算成「CBOE 獨有」，看起來像對不上。
     cbo = {k: v for k, v in occ_src.cboe_oi_map(payload).items() if k[0] in keep}
