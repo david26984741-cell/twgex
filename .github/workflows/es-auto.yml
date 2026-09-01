@@ -18,6 +18,13 @@ name: ES 曝險地圖（自動，跑在紅線）
 # 對外要走公司的 Proxy（proxy.capital.com.tw:8080），已經寫在 runner 的 .env，
 # curl 與 Python 的 urllib 都會自己讀 https_proxy。
 on:
+  schedule:
+    # 兩班都抓「前一個美股期貨場次」，晚的那班是早的那班的補跑。
+    # 台北 09:00（週二~六）＝ 美東前一天 20:00 前後，CME 的量／未平倉報表剛出來不久。
+    - cron: '0 1 * * 2-6'
+    # 台北 15:15（週二~六）＝ 美東 03:15，報表一定已經發布（2026/09/01 實測，
+    # 美東 06:00 抓到的 08/31 是 oi_asof=close，完整的當日收盤未平倉）。
+    - cron: '15 7 * * 2-6'
   workflow_dispatch:
 
 permissions:
