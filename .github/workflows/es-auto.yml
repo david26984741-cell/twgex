@@ -56,10 +56,21 @@ jobs:
       - name: 不變量自我測試
         run: pyemb\python.exe -X utf8 selftest.py
 
+      # build.py 的訊息一律抄一份進 workflow 摘要。
+      # 失敗時 Actions 的 log 介面常常展不開那一步（實測過），
+      # 摘要則一定看得到，而且會留在 run 頁面上。
       - name: 抓 CME 並建 ES 的圖
         run: |
           set PYTHONIOENCODING=utf-8
-          pyemb\python.exe -X utf8 build.py --symbol ES
+          pyemb\python.exe -X utf8 build.py --symbol ES > build_out.txt 2>&1
+          set RC=%ERRORLEVEL%
+          echo ### build.py 的輸出（離開碼 %RC%^) >> %GITHUB_STEP_SUMMARY%
+          echo. >> %GITHUB_STEP_SUMMARY%
+          echo ``` >> %GITHUB_STEP_SUMMARY%
+          type build_out.txt >> %GITHUB_STEP_SUMMARY%
+          echo ``` >> %GITHUB_STEP_SUMMARY%
+          type build_out.txt
+          exit /b %RC%
 
       - name: 把結果交出去
         uses: actions/upload-artifact@v4
