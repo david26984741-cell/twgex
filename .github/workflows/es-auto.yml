@@ -1,0 +1,115 @@
+name: ES 曝險地圖（自動，跑在紅線）
+
+# ── 為什麼要拆成兩個 job ────────────────────────────────────────────────
+# CME 的邊緣節點（Akamai）擋掉 GitHub 自家 runner 的 IP，所以「抓 CME」只能在
+# 自己的機器上做。但那台機器**沒有裝 git**，提交推送做不了。
+# 剛好兩邊的短處互補，所以：
+#   job fetch （紅線）  ：只做一件它獨佔的事——跟 CME 講話，順便把圖算出來
+#   job commit（GitHub）：把結果接過來提交推送
+# 這樣紅線那台只跑必要的部分，其他都留在 GitHub 的機器上。
+#
+# ── 紅線那台的兩個限制（2026/09/01 實測，繞過去了，不用動那台任何設定）──
+# 1. PowerShell 執行原則是 Restricted，workflow 裡任何 .ps1 一律被擋
+#    （連 actions/setup-python 都不行，它內部要跑 setup.ps1）→ 全部用 cmd。
+# 2. 沒有裝 Python → 用 Windows 內建的 curl.exe ＋ tar.exe 抓一份免安裝的
+#    embeddable Python。本專案除了 cme_fetch.py 用到 playwright 之外全是標準
+#    函式庫，所以夠用。不用安裝、不用管理員權限、不碰安全設定。
+#
+# 對外要走公司的 Proxy（proxy.capital.com.tw:8080），已經寫在 runner 的 .env，
+# curl 與 Python 的 urllib 都會自己讀 https_proxy。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gexmap-daily          # 跟每日更新同一組，不會同時寫 data/
+  cancel-in-progress: false
+
+env:
+  PYVER: 3.12.7
+
+jobs:
+  fetch:
+    name: 抓 CME 並建圖（紅線）
+    runs-on: [self-hosted, cme]
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 弄一份可攜式 Python
+        run: |
+          echo === proxy：%https_proxy%
+          if not exist pyemb.zip curl.exe -sSL --retry 2 -o pyemb.zip https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-embed-amd64.zip
+          if not exist pyemb.zip ( echo 下載 Python 失敗 & exit /b 1 )
+          if exist pyemb rmdir /s /q pyemb
+          mkdir pyemb
+          tar -xf pyemb.zip -C pyemb
+          rem embeddable 版的 sys.path 由 ._pth 寫死，要自己把專案目錄加進去，
+          rem 不然 build.py 找不到 engine / symbols / cme 這些同目錄模組。
+          echo %CD%>> pyemb\python312._pth
+          pyemb\python.exe -c "import sys; print(sys.version); print(sys.path)"
+
+      - name: 不變量自我測試
+        run: pyemb\python.exe -X utf8 selftest.py
+
+      - name: 抓 CME 並建 ES 的圖
+        run: |
+          set PYTHONIOENCODING=utf-8
+          pyemb\python.exe -X utf8 build.py --symbol ES
+
+      - name: 把結果交出去
+        uses: actions/upload-artifact@v4
+        with:
+          name: es-data
+          path: data/ES/
+          retention-days: 3
+          if-no-files-found: error
+
+  commit:
+    name: 提交（GitHub 的機器）
+    needs: fetch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 推送被拒時要能 rebase
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: es-data
+          path: data/ES/
+
+      - name: 檢查接到的東西
+        run: |
+          python - <<'PY'
+          import json
+          m = json.load(open("data/ES/latest.json", encoding="utf-8"))["meta"]
+          print(f"trade_date={m['trade_date']}  未平倉={m.get('oi_total'):,}  "
+                f"標的價={m.get('s_ref')}  來源={m.get('source')}")
+          assert m.get("oi_total", 0) > 0, "未平倉是 0，不提交"
+          PY
+
+      - name: 提交
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # 一定要先 add 再比對：git diff 看不到「未追蹤」的新檔。
+          git add -A data/ES/
+          if git diff --cached --quiet -- data/ES/; then
+            echo "ES 資料沒有變動（可能是重複跑同一天），跳過提交。"
+            exit 0
+          fi
+          D=$(python -c "import json;print(json.load(open('data/ES/latest.json',encoding='utf-8'))['meta']['trade_date'])")
+          git commit -m "曝險地圖更新 ES $D"
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then echo "推送成功（第 $i 次）"; exit 0; fi
+            echo "推送被拒，rebase 後重試（第 $i 次）"
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort || true; echo "::error::rebase 失敗"; exit 1; }
+            sleep 5
+          done
+          echo "::error::推送連續失敗三次"; exit 1
