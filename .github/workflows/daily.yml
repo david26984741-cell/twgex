@@ -2,23 +2,22 @@ name: 每日更新曝險地圖
 
 on:
   schedule:
-    # 台北 15:15（UTC+8）：台指。一般交易時段 13:45 收盤，期交所盤後檔通常 15:00 前後上架。
-    # 只有這一班、沒有保險班——期交所當天若延遲上架，就自己按 Run workflow 補跑。
+    # ── 台北 09:00（週二~週六）：SPX / SPY / QQQ ────────────────────────────
+    # 抓的是**前一個**美股收盤。台北 09:00 ＝ 美東前一天 21:00（夏令）／20:00（冬令）。
+    # 為什麼這個時點可以：未平倉改向 OCC 拿之後，OCC 在交易日**當天傍晚**（美東約 20:00）
+    # 就發布逐序列未平倉，不必再等 CBOE 隔天早上才吃進去；而 CBOE 每一檔的 prev_day_close
+    # 在美東當天收盤那一刻就滾成同一個交易日。兩邊天然同日。
+    # 對齊窗口一路開到隔天台北 04:00（美東收盤），所以 GitHub 排程延遲三小時也無所謂。
+    # 冬令時 OCC 大約在台北 09:00 整點才發布，可能剛好還沒到——底下的重試會等，
+    # 真的等不到就整天不產出（build.py 會擋下「新價格＋舊未平倉」的拼裝圖），
+    # 下午 15:15 那班會再補一次。
+    - cron: '0 1 * * 2-6'
+    # ── 台北 15:15（週一~週五）：台指 TXO ──────────────────────────────────
+    # 一般交易時段 13:45 收盤，期交所盤後檔約 15:00 上架，留 15 分鐘。
     - cron: '15 7 * * 1-5'
     # 註：ES（CME）不在這裡。CME 的邊緣節點擋掉 GitHub Actions 的 IP（純 Python 403、
-    #     無頭 Chromium 走 HTTP/1.1 逾時），抓資料那一步只能在自己的機器上用瀏覽器做。
-    #     流程改成：開 tools/cme.html 抓成 raw/cme_ES.json 上傳 → es.yml 接手建圖。
-    # 台北 23:00 ＝ 美東夏令 11:00 / 冬令 10:00，抓前一個交易日的收盤。
-    #
-    # 為什麼是「開盤後」而不是「開盤前」——這一點跟直覺相反，踩過兩次才弄清楚：
-    # CBOE 這份檔案裡，價格是即時的，未平倉量卻要等 OCC 隔天早上才更新（實測美東 10:00~10:30）。
-    # 也就是說，開盤前抓 → 價格對（前一日收盤）但未平倉舊一天；
-    # 等未平倉更新 → 未平倉對了但價格已經變成當日盤中。**沒有任何一個時點兩者同時正確。**
-    # 解法是價格改取每一檔的 prev_day_close（前一交易日收盤價），
-    # 於是只要「未平倉已更新」這一個條件成立就行，而那個窗口一路開到當天收盤，
-    # 有好幾個小時，完全不怕 GitHub 排程延遲。
-    # 底下的「等未平倉更新」那一步會確認條件成立才開始建圖，沒等到就整天不產出。
-    - cron: '0 15 * * 1-5'
+    #     無頭 Chromium 走 HTTP/1.1 逾時），抓資料那一步只能從一般網路的機器打。
+    #     要把 ES 收進這個 workflow，得在自己那台裝 self-hosted runner。
   workflow_dispatch:
     inputs:
       symbols:
@@ -28,11 +27,11 @@ on:
         required: false
         default: ''
       oi_source:
-        description: '美股未平倉來源（occ ＝ 直接向 OCC 拿，比 CBOE 早十幾個小時）'
+        description: '美股未平倉來源。預設 occ（直接向 OCC 拿，比 CBOE 早十幾個小時）；cboe 是舊路徑，留著備援'
         required: false
-        default: 'cboe'
+        default: 'occ'
         type: choice
-        options: ['cboe', 'occ']
+        options: ['occ', 'cboe']
 
 permissions:
   contents: write
@@ -59,25 +58,22 @@ jobs:
       - name: 決定要跑哪些標的
         id: pick
         run: |
-          # 不要用 github.event.schedule 的字串去比對——2026-08-27 那一輪（#18）證明它會失效：
-          # cron 明明是 '0 15 * * 1-5'，卻掉進 TXO 那個分支，美股整晚沒更新。
-          # 改成看實際的 UTC 時刻，早班／晚班一翻兩瞪眼。
-          H=$(date -u +%-H)
+          # **排程一律跑全部四檔，不再依「哪一班」分流。**
+          # 2026/08/27 那輪（#18）就是栽在分流：cron 明明是美股那班，卻掉進台指分支，
+          # 美股整晚沒更新。改用 UTC 時刻判斷也只是把猜測換一種寫法。
+          # 現在乾脆不猜——兩班都跑全部，讓各自的新舊判斷去決定要不要寫：
+          #   build.py 抓到比現有舊的日期只寫歷史檔、不動 latest.json；
+          #   提交那步沒有變動就跳過。
+          # 所以「多跑一次」永遠是安全的，而且下午那班天然變成早上那班的補跑。
           if [ -n "${{ github.event.inputs.symbols }}" ]; then
             SYMS="${{ github.event.inputs.symbols }}"
-          elif [ "${{ github.event_name }}" != "schedule" ]; then
-            SYMS="TXO SPX SPY QQQ"
-          elif [ "$H" -ge 12 ]; then
-            SYMS="TXO SPX SPY QQQ"    # 晚班：美股為主，順便補台指（同一天已建好就不會重寫）
           else
-            SYMS="TXO"
+            SYMS="TXO SPX SPY QQQ"
           fi
-          # 未平倉來源。OCC 在交易日當天傍晚（美東約 20:00）就發布逐序列未平倉，
-          # CBOE 這份 delayed_quotes 檔要隔天早上（美東 10:00~10:30）才吃進去。
-          # 目前預設仍走 CBOE；手動 dispatch 時可以選 occ 做平行驗證。
+          # 未平倉來源預設 OCC。排程觸發時 inputs 是空的，所以這裡要自己補預設值。
           SRC="${{ github.event.inputs.oi_source }}"
-          [ -n "$SRC" ] || SRC=cboe
-          echo "事件=${{ github.event_name }}  排程字串='${{ github.event.schedule }}'  UTC 時=$H  選到=$SYMS  未平倉來源=$SRC"
+          [ -n "$SRC" ] || SRC=occ
+          echo "事件=${{ github.event_name }}  排程字串='${{ github.event.schedule }}'  UTC 時=$(date -u +%-H)  選到=$SYMS  未平倉來源=$SRC"
           echo "syms=$SYMS" >> "$GITHUB_OUTPUT"
           echo "oi_source=$SRC" >> "$GITHUB_OUTPUT"
           echo "要更新：$SYMS（未平倉來源 $SRC）"
@@ -90,19 +86,35 @@ jobs:
       - name: 產生資料
         run: |
           fail=0
-          # 未平倉來源只對美股三檔有意義：台指走期交所，ES 走 CME，兩邊都不經過 OCC。
           OIARG=""
           # 注意：這裡不能寫成 `[ ... ] && OIARG=...`——Actions 的 shell 帶 -e，
           # 條件不成立時整串回傳 1，整個步驟會當場失敗。
           if [ "${{ steps.pick.outputs.oi_source }}" = "occ" ]; then OIARG="--oi-source occ"; fi
           for s in ${{ steps.pick.outputs.syms }}; do
             echo "::group::$s"
-            A=""
-            case "$s" in SPX|SPY|QQQ) A="$OIARG";; esac
             if [ "$s" = "ES" ]; then
               echo "::warning::ES 不從這裡抓（CME 擋 Actions 的 IP），請用 tools/cme.html"
-            elif python build.py --symbol "$s" $A; then :; else
-              echo "::warning::$s 更新失敗（來源可能暫時不可用）"; fail=1
+              echo "::endgroup::"
+              continue
+            fi
+            A=""
+            case "$s" in SPX|SPY|QQQ) A="$OIARG";; esac
+            # **來源晚上架就等一下再試。** 兩邊都會遲到：
+            #   期交所盤後檔約 15:00 上架（我們 15:15 跑，偶爾還沒好）；
+            #   OCC 夏令台北 08:00 發布、冬令 09:00（我們 09:00 跑，冬令會卡在整點）。
+            # build.py 遇到「未平倉與價格不同日」會直接不產出（不會畫拼裝圖），
+            # 所以這裡重試是安全的：三次、每次隔 5 分鐘。
+            ok=0
+            for attempt in 1 2 3; do
+              if python build.py --symbol "$s" $A; then ok=1; break; fi
+              if [ "$attempt" != "3" ]; then
+                echo "第 $attempt 次沒成功，等 5 分鐘再試（來源可能還沒上架）"
+                sleep 300
+              fi
+            done
+            if [ "$ok" != "1" ]; then
+              echo "::warning::$s 更新失敗（來源可能還沒上架，下一班會再補）"
+              fail=1
             fi
             echo "::endgroup::"
           done
