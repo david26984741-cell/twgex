@@ -2,62 +2,36 @@ name: 紅線探測（一次性，測完可刪）
 
 # 在自己的機器（self-hosted runner，標籤 cme）上跑，回答一個問題：
 # 純 Python 打不打得到 CME？打得通的話，整條 ES 可以不用瀏覽器。
-# 只讀不寫，不影響任何產出。
+#
+# **這台的 PowerShell 執行原則是 Restricted**（2026/09/01 實測：workflow 裡的 .ps1
+# 一律回「running scripts is disabled on this system」）。所以這裡一律用 cmd，
+# 而且 cmd 只負責呼叫 Python，報告內容全部由 Python 產生——
+# 在批次檔裡組 Markdown 表格要跳脫一堆符號，不值得。
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: cmd
+
 jobs:
   probe:
     runs-on: [self-hosted, cme]
     steps:
-      - name: 這台機器有什麼
-        continue-on-error: true
-        shell: powershell
-        run: |
-          $out = $env:GITHUB_STEP_SUMMARY
-          function W($t) { $t | Out-File -FilePath $out -Append -Encoding utf8 }
-          function V($c) { try { (& $c --version 2>&1 | Select-Object -First 1) } catch { "沒有" } }
-          W "## 紅線探測"
-          W ""
-          W "機器 ``$env:COMPUTERNAME``，本機時間 $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
-          W ""
-          W "| 項目 | 結果 |"
-          W "|---|---|"
-          W "| python | $(V python) |"
-          W "| python3 | $(V python3) |"
-          W "| py | $(V py) |"
-          W "| git | $(V git) |"
-          W "| https_proxy | $(if ($env:https_proxy) { $env:https_proxy } else { '（沒設）' }) |"
-          W ""
-
       - name: 取得程式碼
-        id: co
-        continue-on-error: true
         uses: actions/checkout@v4
 
-      - name: 純 Python 打 CME
-        if: steps.co.outcome == 'success'
+      - name: 有沒有 Python
         continue-on-error: true
-        shell: powershell
         run: |
-          $py = "python"
-          if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-            if (Get-Command py -ErrorAction SilentlyContinue) { $py = "py" }
-            else {
-              "**這台找不到 Python，跳過 CME 測試。**" |
-                Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-              exit 0
-            }
-          }
-          & $py tools/cme_probe.py 2>&1 |
-            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          where python
+          where py
+          where git
 
-      - name: 取不到程式碼時的說明
-        if: steps.co.outcome != 'success'
-        shell: powershell
+      - name: 純 Python 打 CME
+        continue-on-error: true
         run: |
-          "**這台的 checkout 失敗（多半是沒裝 git，或 git 走不到 Proxy），所以沒測成 CME。**" |
-            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          python tools\cme_probe.py >> %GITHUB_STEP_SUMMARY% 2>&1 || py tools\cme_probe.py >> %GITHUB_STEP_SUMMARY% 2>&1
