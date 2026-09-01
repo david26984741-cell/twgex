@@ -76,7 +76,7 @@ gh repo create twopt-gexmap --private --source=. --push
 |---|---|---|
 | 週二～六 09:00 | SPX / SPY / QQQ | 抓的是**前一個**美股收盤。未平倉向 OCC 拿、價格取 CBOE 的 `prev_day_close` |
 | 週一～五 15:15 | TXO | 一般交易時段 13:45 收盤，期交所盤後檔約 15:00 上架 |
-| — | ES | 不在 Actions 裡（CME 擋 Actions 的 IP），見下 |
+| 週二～六 09:00 ／ 15:15 | ES | 跑在自架 runner（紅線那台）上，見下。兩班互為補跑 |
 
 兩班都會跑全部四檔，不依「哪一班」分流——分流栽過一次（2026/08/27 那輪 cron 明明是美股那班
 卻掉進台指分支，美股整晚沒更新）。多跑一次永遠是安全的：`build.py` 抓到比現有舊的日期
@@ -99,10 +99,30 @@ GitHub Actions 連得到。改用它之後，未平倉與價格在美東收盤�
 產出的 `meta` 裡 `oi_as_of`、`price_as_of` 必須相同，`oi_source` 會標明是 OCC 還是 CBOE。
 `--oi-source cboe` 保留成備援路徑（那條路才需要 `wait_oi.py` 等未平倉更新）。
 
-**ES（CME 小型 S&P 期貨選擇權）不走 GitHub Actions。** CME 的邊緣節點擋掉 Actions 的 IP——
-純 Python 請求回 403、無頭 Chromium 走 HTTP/2 連線被重置、改走 HTTP/1.1 則 90 秒逾時（連試三次）。
-從一般家用 / 辦公網路的瀏覽器打同樣的 API 則完全正常。所以 ES 改成
-**每個交易日晚上由排程任務去驅動一台開著的 Chrome 抓**，抓完直接更新 repo。
+**ES（CME 小型 S&P 期貨選擇權）走自架 runner。** CME 的邊緣節點擋掉 GitHub 自家機器的 IP——
+純 Python 請求回 403、無頭 Chromium 走 HTTP/2 連線被重置、改走 HTTP/1.1 則 90 秒逾時。
+但從一般網路的機器打同樣的 API 完全正常。所以 `es-auto.yml` 拆成兩個 job：
+
+| job | 跑在哪 | 做什麼 | 為什麼 |
+|---|---|---|---|
+| `fetch` | 自架 runner（標籤 `cme`） | 抓 CME、算圖 | 只有這台的 IP 打得到 CME |
+| `commit` | GitHub 的機器 | 接過結果、提交推送 | 那台**沒有裝 git** |
+
+那台機器的三個坑（2026/09/01 一次踩完，都繞過去了，不必更動那台任何設定）：
+
+1. **PowerShell 執行原則是 Restricted**——workflow 裡任何 `.ps1` 一律被
+   「running scripts is disabled on this system」擋掉，連 `actions/setup-python`
+   都不行（它內部要跑 `setup.ps1`）。→ 全部改用 `shell: cmd`。
+2. **沒有裝 Python**。→ 用 Windows 內建的 `curl.exe` ＋ `tar.exe` 抓一份
+   python.org 的 embeddable 版解開來用。本專案除了 `cme_fetch.py` 用到 playwright
+   之外全是標準函式庫，所以夠用；不用安裝、不用管理員權限。
+   （embeddable 版的 `sys.path` 由 `._pth` 寫死，要把專案目錄加進去，
+   不然 `build.py` 找不到 `engine` / `symbols` / `cme`。）
+3. **在公司網路裡，對外要走 Proxy**。→ runner 目錄下放一個 `.env` 寫
+   `https_proxy` / `http_proxy`，curl 與 Python 的 urllib 都會自己讀。
+
+**`User-Agent` 的版本號一定要寫成四段**（`Chrome/140.0.0.0`），寫成兩段（`Chrome/125.0`）
+會被 Akamai 回 403——同一個 IP、同一組其他標頭，實測一個 200 一個 403。
 
 在一般網路環境的機器上要手動補跑，兩行就好：
 
