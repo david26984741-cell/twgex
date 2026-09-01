@@ -353,6 +353,17 @@ def cme_tests():
         allow_stale_oi = True
     check("加了 --allow-stale-oi 可以放行部分退回", _guard_ok(_B(), m4))
 
+
+    # 2026/09/01 踩到：EW3M28（很遠的週選）未平倉是 0，卻被算成
+    # 「占總未平倉 100.00%（0 / 0 口）」，ES 整批不產出。
+    # 兩個成因都修了：fetch_chain 現在會給 oi_total，guard 也不再把「0 口」當成 100%。
+    check("退回的系列一口部位都沒有時不該擋",
+          _guard_ok(_A(), {"oi_fellback": 1, "oi_fellback_oi": 0, "oi_total": 0,
+                           "oi_fellback_codes": ["EW3M28"]}),
+          "0 / 0 不是 100%，是「沒有東西被弄舊」")
+    check("oi_total 有值、退回 0 口，一樣放行",
+          _guard_ok(_A(), {"oi_fellback": 1, "oi_fellback_oi": 0, "oi_total": 500_000,
+                           "oi_fellback_codes": ["X"]}))
     # --- 成交量表的月份守門 ---
     class FakeGet:
         def __init__(self, month): self.month = month

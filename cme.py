@@ -205,12 +205,19 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
 
     chain = {k: v for k, v in chain.items() if v["strikes"]}
     fut = fetch_futures(trade_day, sym)
+    # oi_total 一定要給。build.py 的 _cme_oi_guard 用它算「退回前一日的系列占多少」，
+    # 沒有的話分母是 0、占比被當成 100%，整批就永遠被擋下來。
+    # 2026/09/01 踩到：這條線路（不經 --json、直接連 CME）從來沒跑過，
+    # 所以一直沒發現 chain_from_dump 有給、fetch_chain 沒給。
+    oi_tot = sum(v.get("oi", 0) for b in chain.values()
+                 for st in b["strikes"].values() for v in st.values())
     meta = {"symbol": sym, "trade_day": trade_day, "futures": fut,
             "n_contracts_all": n_all, "n_contracts_used": n_used,
             "n_requests": tried, "spot": front_settle(fut),
             "oi_asof": "close" if n_merged else "prev",
             "oi_report": rt_lock, "oi_merged": n_merged, "oi_fellback": n_fellback,
-            "oi_fellback_oi": fb_oi, "oi_fellback_codes": fb_codes}
+            "oi_fellback_oi": fb_oi, "oi_fellback_codes": fb_codes,
+            "oi_total": oi_tot}
     return chain, meta
 
 

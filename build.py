@@ -360,9 +360,12 @@ def _cme_oi_guard(args, meta) -> None:
         raise SystemExit(
             "  未平倉整批退回「前一個交易日」（成交量表一個都沒併進來）。"
             "這通常表示抓太早、CME 當日的量／未平倉報表還沒發布。不產出。")
-    if not fb_n:
+    if not fb_n or fb_oi <= 0:
+        # 退回的系列身上一口部位都沒有，就沒有東西被弄舊，不必擋。
+        # 2026/09/01 踩到：EW3M28（很遠的週選）未平倉是 0，
+        # 卻被算成「占總未平倉 100.00%（0 / 0 口）」而整批不產出。
         return
-    share = (fb_oi / oi_tot) if oi_tot else 1.0
+    share = (fb_oi / oi_tot) if oi_tot > 0 else 1.0
     who = "、".join(str(c) for c in codes[:6]) + ("…" if len(codes) > 6 else "")
     line = (f"  {fb_n} 個系列的未平倉退回前一日（{who}），"
             f"占總未平倉 {share:.2%}（{fb_oi:,} / {oi_tot:,} 口）")
