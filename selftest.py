@@ -294,22 +294,33 @@ def cme_tests():
 
     # --- CBOE：prev_day_close 與 last_trade_time 換日時點不同 ---
     import cboe as _cboe
-    snap = lambda ts, lt, cur=None, pv=None: _cboe.snapshot_state(
-        {"timestamp": ts, "data": {"last_trade_time": lt,
+    snap = lambda ts, lt, cur=None, pv=None, close=None: _cboe.snapshot_state(
+        {"timestamp": ts, "data": {"last_trade_time": lt, "close": close,
                                    "current_price": cur, "prev_day_close": pv}})
-    # 四個都是真實踩過或量過的情境
+    # 六個都是真實踩過或量過的情境
     a = snap("2026-08-27 14:33:16", "2026-08-27T10:33:00", 769.07, 766.08)
-    check("盤中抓：prev_day_close 還是前一場次的", not a["rolled"], str(a["rolled_px"]))
+    check("盤中抓：prev_day_close 還是前一場次的", not a["rolled"],
+          "場次還沒收，這一關就要擋掉")
     b = snap("2026-08-27 23:27:47", "2026-08-27T16:14:59", 771.10, 766.08)
     check("收盤後、還沒滾：仍然算前一場次", not b["rolled"], "這是昨晚建出正確 08/26 的那一輪")
     c = snap("2026-08-28 03:50:37", "2026-08-27T15:59:59", 771.10, 771.10)
-    check("收盤後、已經滾了：現價＝前收就是滾過了",
+    check("收盤後、已經滾了：收盤價＝前收就是滾過了",
           c["rolled"] and c["rolled_px"] and not c["rolled_cal"],
           "日曆判準抓不到這個（同一個美東日期），價格判準抓得到")
     d = snap("2026-08-27 05:45:07", "2026-08-26T16:00:00", 766.08, 766.08)
-    check("跨到隔天、也已經滾了：兩個判準都成立",
-          d["rolled"] and d["rolled_px"] and d["rolled_cal"],
+    check("跨到隔天、也已經滾了", d["rolled"] and d["rolled_px"] and d["rolled_cal"],
           "這是 08/27 07:55 那次把 08/26 的價格標成 08/25 的成因")
+    # 2026/09/01 實測：QQQ 的 close 與 prev_day_close 都是 716.76（已經滾了），
+    # 但 current_price 是 716.70。用 current_price 比會判成「還沒滾」，
+    # 價格被算成前一天、跟 OCC 的未平倉對不起來，整批美股當天不產出。
+    f = snap("2026-09-01 03:57:33", "2026-08-31T15:59:59", 716.70, 716.76, close=716.76)
+    check("current_price 與收盤價差幾分錢時仍判得出已經滾了",
+          f["rolled"], "要比 close，不是比 current_price——差六分錢就整批不產出")
+    g = snap("2026-09-01 03:57:33", "2026-08-31T15:59:59", 716.70, 710.00, close=716.76)
+    check("真的還沒滾（前收是更早那天）就不能誤判成滾了", not g["rolled"])
+    h = snap("2026-09-01 18:20:00", "2026-09-01T13:45:00", 716.70, 716.70, close=716.70)
+    check("盤中價格剛好等於前收也不算滾（場次還沒收）", not h["rolled"],
+          "沒有 session_over 這一關的話，盤中完全沒動的標的會被誤判")
     e = snap("", "")
     check("欄位缺漏時不會炸、也不會誤判成滾過", e["rolled"] is False, str(e["rolled"]))
 

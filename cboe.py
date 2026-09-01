@@ -141,23 +141,40 @@ def snapshot_state(payload: dict) -> dict:
     lt = (d.get("last_trade_time") or "")[11:16]     # 'HH:MM'
     opened = bool(lt) and lt >= "09:30"
 
-    # 最硬的判準：場次一結束，prev_day_close 就會滾成「剛結束那個場次」的收盤，
-    # 而 current_price（最後一筆成交）本來就等於那個收盤——兩個欄位相等就是已經滾過了。
-    # 盤中則不可能相等（除非當天完全沒動，那種情況下標錯也無害，因為價格根本一樣）。
     def _f(v):
         try:
             return float(v)
         except (TypeError, ValueError):
             return None
-    cur, pv = _f(d.get("current_price")), _f(d.get("prev_day_close"))
-    rolled_px = cur is not None and pv is not None and abs(cur - pv) < 1e-9
-    # 日曆換日是第二道訊號（抓檔當下已經是下一個美東日期）
+    cur = _f(d.get("current_price"))
+    close = _f(d.get("close"))
+    pv = _f(d.get("prev_day_close"))
+
+    # 日曆換日：抓檔當下已經是下一個美東日期。只當輔助訊號，不單獨用來判定
+    # （它會有偽陽性：跨過午夜但 prev_day_close 還沒滾的話會誤判）。
     rolled_cal = bool(sess and us_date and us_date > sess)
 
+    # 第一關：last_trade_time 那個場次到底收了沒。
+    # 盤中的 prev_day_close 本來就是前一場次的，不該被判成「已經滾過」。
+    # 半日交易（早收 13:00）那幾天 lt 不會到 15:59，要靠 rolled_cal 補；
+    # 台北早上那班遇到半日會跳過不產出，下午那班會補起來。
+    session_over = bool(lt) and (lt >= "15:59" or rolled_cal)
+
+    # 第二關：prev_day_close 是不是已經滾成「剛收完那個場次」的收盤。
+    # **要比的是 close（官方收盤價），不是 current_price。**
+    # 2026/09/01 踩到：QQQ 的 close 與 prev_day_close 都是 716.76（已經滾了），
+    # 但 current_price 是 716.70——差六分錢，用 current_price 比就判成「還沒滾」，
+    # 於是價格被算成前一天，跟 OCC 的未平倉對不起來，整批美股當天不產出。
+    # current_price 留著當備援（有些檔案 close 可能沒填）。
+    def _eq(x):
+        return x is not None and pv is not None and abs(x - pv) < 1e-9
+    rolled_px = session_over and (_eq(close) or _eq(cur))
+
     return {"sess": sess, "us_date": us_date, "last_trade_hhmm": lt,
-            "opened": opened, "current_price": cur, "prev_day_close": pv,
+            "opened": opened, "session_over": session_over,
+            "current_price": cur, "close": close, "prev_day_close": pv,
             "rolled_px": rolled_px, "rolled_cal": rolled_cal,
-            "rolled": rolled_px or rolled_cal}
+            "rolled": rolled_px}
 
 
 def parse_chain(payload: dict, trade_day: Optional[str] = None,
