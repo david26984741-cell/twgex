@@ -37,8 +37,13 @@ import urllib.request
 from typing import Dict, List, Optional, Tuple
 
 BASE = "https://www.cmegroup.com"
+# **版本號一定要寫成四段（140.0.0.0），不能寫成兩段（125.0）。**
+# 2026/09/01 在紅線那台實測：同一個端點、同一組其他標頭、同一個 IP，
+#   Chrome/140.0.0.0 → HTTP 200、29,065 bytes、JSON 正常
+#   Chrome/125.0     → HTTP 403 Forbidden（第一個請求就被擋）
+# 真實的 Chrome UA 版本號永遠是四段，Akamai 顯然拿這個當特徵之一。
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/125.0 Safari/537.36")
+      "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
 HDRS = {"User-Agent": UA, "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9", "Referer": BASE + "/"}
 
