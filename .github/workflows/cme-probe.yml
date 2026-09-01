@@ -3,10 +3,16 @@ name: 紅線探測（一次性，測完可刪）
 # 在自己的機器（self-hosted runner，標籤 cme）上跑，回答一個問題：
 # 純 Python 打不打得到 CME？打得通的話，整條 ES 可以不用瀏覽器。
 #
-# **這台的 PowerShell 執行原則是 Restricted**（2026/09/01 實測：workflow 裡的 .ps1
-# 一律回「running scripts is disabled on this system」）。所以這裡一律用 cmd，
-# 而且 cmd 只負責呼叫 Python，報告內容全部由 Python 產生——
-# 在批次檔裡組 Markdown 表格要跳脫一堆符號，不值得。
+# ── 這台機器的兩個限制（2026/09/01 實測）────────────────────────────────
+# 1. **PowerShell 執行原則是 Restricted**：workflow 裡任何 .ps1 一律回
+#    「running scripts is disabled on this system」。連 actions/setup-python
+#    都掛掉，因為它內部要跑 setup.ps1。所以這裡一律用 cmd。
+# 2. **沒有裝 Python**（where python / where py 都找不到）。
+#
+# 解法：用 Windows 內建的 curl.exe ＋ tar.exe（Win10 1803 以後都有）
+# 抓一份 python.org 的 embeddable 版本解開來用。不用安裝、不用管理員權限、
+# 不碰任何安全設定。本專案除了 cme_fetch.py 用到 playwright 之外
+# **全部只用標準函式庫**，所以 embeddable 版本就夠。
 on:
   workflow_dispatch:
 
@@ -17,6 +23,9 @@ defaults:
   run:
     shell: cmd
 
+env:
+  PYVER: 3.12.7
+
 jobs:
   probe:
     runs-on: [self-hosted, cme]
@@ -24,25 +33,20 @@ jobs:
       - name: 取得程式碼
         uses: actions/checkout@v4
 
-      # 2026/09/01 實測：這台**沒有** Python（where python / where py 都找不到）。
-      # 用 setup-python 讓 Actions 自己裝進 runner 的工具快取，使用者完全不用動手。
-      # 它走 @actions/http-client，會讀 https_proxy 環境變數（runner 的 .env 已設）。
-      - name: 裝 Python
-        id: setup
-        continue-on-error: true
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: 有沒有 Python
+      - name: 弄一份可攜式 Python
+        id: pyemb
         continue-on-error: true
         run: |
-          where python
-          where py
-          where git
-          python --version
+          echo === curl 走的 proxy：%https_proxy%
+          curl.exe -sSL --retry 2 -o pyemb.zip https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-embed-amd64.zip
+          if not exist pyemb.zip ( echo 下載失敗 & exit /b 1 )
+          for %%A in (pyemb.zip) do echo === 下載到 %%~zA bytes
+          if exist pyemb rmdir /s /q pyemb
+          mkdir pyemb
+          tar -xf pyemb.zip -C pyemb
+          pyemb\python.exe --version
 
       - name: 純 Python 打 CME
         continue-on-error: true
         run: |
-          python tools\cme_probe.py >> %GITHUB_STEP_SUMMARY% 2>&1 || py tools\cme_probe.py >> %GITHUB_STEP_SUMMARY% 2>&1
+          pyemb\python.exe tools\cme_probe.py >> %GITHUB_STEP_SUMMARY% 2>&1
