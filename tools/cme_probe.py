@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -62,10 +63,32 @@ def probe(name: str, path: str) -> str:
     return f"| {name} | {code} | {len(body):,} | {time.time()-t0:.1f} | {note} |"
 
 
-def main() -> int:
-    print("### 純 Python 打 CME")
+def _env_block() -> None:
+    """環境資訊也在這裡印。
+
+    那台機器的 PowerShell 執行原則是 Restricted，workflow 裡任何 .ps1 都會被
+    「running scripts is disabled on this system」擋掉（2026/09/01 實測），
+    所以整份報告都由 Python 產生，shell 只負責呼叫。
+    """
+    import platform
+    import shutil
+    print("### 這台機器")
     print("")
-    print(f"Proxy 環境變數：`{os.environ.get('https_proxy') or '（沒設）'}`")
+    print("| 項目 | 值 |")
+    print("|---|---|")
+    print(f"| 電腦 | {platform.node()} |")
+    print(f"| 系統 | {platform.system()} {platform.release()} |")
+    print(f"| Python | {sys.version.split()[0]}（{sys.executable}） |")
+    for tool in ("git", "chrome", "msedge"):
+        print(f"| {tool} | {shutil.which(tool) or '**沒有**'} |")
+    for var in ("https_proxy", "http_proxy", "no_proxy"):
+        print(f"| {var} | `{os.environ.get(var) or '（沒設）'}` |")
+    print("")
+
+
+def main() -> int:
+    _env_block()
+    print("### 純 Python 打 CME")
     print("")
     print("| 端點 | HTTP | 位元組 | 秒 | 結果 |")
     print("|---|---|---|---|---|")
