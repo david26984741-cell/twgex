@@ -24,12 +24,23 @@ jobs:
       - name: 取得程式碼
         uses: actions/checkout@v4
 
+      # 2026/09/01 實測：這台**沒有** Python（where python / where py 都找不到）。
+      # 用 setup-python 讓 Actions 自己裝進 runner 的工具快取，使用者完全不用動手。
+      # 它走 @actions/http-client，會讀 https_proxy 環境變數（runner 的 .env 已設）。
+      - name: 裝 Python
+        id: setup
+        continue-on-error: true
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: 有沒有 Python
         continue-on-error: true
         run: |
           where python
           where py
           where git
+          python --version
 
       - name: 純 Python 打 CME
         continue-on-error: true
