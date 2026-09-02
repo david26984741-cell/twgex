@@ -32,6 +32,12 @@ const isNarrow = () => innerWidth < 760;
 const S = {                                      // UI 狀態
   data: null, sym: null, exp: 'ALL', band: 0.20, bucket: null,
   sign: 'net', beta: 1.0, cvd: 0,
+  // 使用者自己選過的顯示區間。null = 還沒選過，交給 pickBand 自動挑。
+  // 一旦選過就不再自動覆蓋——換標的時保持原樣是使用者的預期。
+  bandPref: null,
+  // 分桶要逐標的記：台指是 50/100/200 點、美股是 0.5/1/2 元，數值本身跨標的沒有意義，
+  // 但「在台指那頁選過 100 點」這件事應該在切回台指時還在。
+  bucketBy: {},
 };
 
 /* --------------------------------------------------------- 慣例與定義
@@ -275,8 +281,13 @@ function applyMeta() {
   E = m.unit_div || 1e8;
   UNIT = m.unit || '億元';
   const sb = $('#selBand');                    // option 的字串與數值不一定字面相等，用數值比對
-  const want = pickBand(m.default_view_band || 0.20);
-  const opt = [...sb.options].reduce((a, o) =>
+  const cap = m.default_view_band || 0.20;
+  // 使用者自己選過顯示區間的話就沿用，不要每次換標的又被自動判斷蓋掉。
+  // 只有還沒選過（bandPref 是 null）才讓 pickBand 挑一個適合這個標的的。
+  // 沿用時仍受這個標的的輸出範圍限制——挑不超過 cap 的最接近選項。
+  const want = S.bandPref != null ? Math.min(S.bandPref, cap) : pickBand(cap);
+  const usable = [...sb.options].filter(o => parseFloat(o.value) <= cap + 1e-9);
+  const opt = (usable.length ? usable : [...sb.options]).reduce((a, o) =>
     Math.abs(parseFloat(o.value) - want) < Math.abs(parseFloat(a.value) - want) ? o : a);
   sb.value = opt.value; S.band = parseFloat(opt.value);
   mountBuckets();
@@ -379,8 +390,12 @@ function mountBuckets() {
     const n = Number.isInteger(v) ? fmtK(v) : v.toLocaleString('en-US', { maximumFractionDigits: 2 });
     return [v, tw ? `每 ${n} 點` : `每 $${n}`];
   }));
-  // 手機上原始履約價會擠成一片，預設挑一個讓長條數量落在 100 根以內的分桶
-  if (S.bucket == null || !opts.some(o => o[0] === S.bucket)) {
+  // 這個標的上次選過什麼就用什麼；沒有的話才落到預設。
+  const remembered = S.bucketBy[S.data.meta.symbol];
+  if (remembered != null && opts.some(o => o[0] === remembered)) {
+    S.bucket = remembered;
+  } else if (S.bucket == null || !opts.some(o => o[0] === S.bucket)) {
+    // 手機上原始履約價會擠成一片，預設挑一個讓長條數量落在 100 根以內的分桶
     const span = S.data.meta.s_ref * S.band * 2;
     S.bucket = isNarrow() ? (opts.find(o => o[0] > 0 && span / o[0] <= 100) || opts[1])[0] : 0;
   }
@@ -1416,6 +1431,17 @@ function wireSetts() {
   const pref = loadPref();
   applyFs(pref.fs || 1);
   if (pref.cvd === '1') { S.cvd = '1'; document.documentElement.setAttribute('data-cvd', '1'); }
+  // 上次調好的設定接著用。要在第一次 switchTo 之前套，第一張圖才會直接是對的。
+  if (pref.band != null && isFinite(+pref.band)) S.bandPref = +pref.band;
+  if (pref.bucketBy && typeof pref.bucketBy === 'object') S.bucketBy = { ...pref.bucketBy };
+  if (pref.sign === 'net' || pref.sign === 'gross') S.sign = pref.sign;
+  if (pref.beta != null && isFinite(+pref.beta)) {
+    S.beta = Math.max(0, Math.min(3, +pref.beta));
+    $('#rngBeta').value = String(S.beta);
+    $('#valBeta').textContent = S.beta.toFixed(1);
+  }
+  [...$('#segSign').querySelectorAll('button')].forEach(b =>
+    b.setAttribute('aria-pressed', b.dataset.v === S.sign));
 
   const has = c => syms.some(x => x.code === c);
   const h = readHash();
@@ -1445,7 +1471,9 @@ function wireSetts() {
     S.exp = b.dataset.v; render();
   });
   $('#selExp').addEventListener('change', e => { S.exp = e.target.value; render(); });
-  segment($('#segSign'), 'sign', v => v);
+  segment($('#segSign'), 'sign', v => v, () => {
+    savePref({ ...loadPref(), sign: S.sign }); render();
+  });
   segment($('#segCvd'), 'cvd', v => v, () => {
     document.documentElement.setAttribute('data-cvd', S.cvd);
     savePref({ ...loadPref(), cvd: S.cvd }); render();
@@ -1455,11 +1483,23 @@ function wireSetts() {
     const v = parseFloat(b.dataset.v);
     applyFs(v); savePref({ ...loadPref(), fs: v }); render();
   });
-  $('#selBand').addEventListener('change', e => { S.band = +e.target.value; mountBuckets(); render(); });
-  $('#selBucket').addEventListener('change', e => { S.bucket = parseFloat(e.target.value); render(); });
+  $('#selBand').addEventListener('change', e => {
+    S.band = +e.target.value;
+    S.bandPref = S.band;                     // 選過就記住，之後換標的不再自動挑
+    savePref({ ...loadPref(), band: S.bandPref });
+    mountBuckets(); render();
+  });
+  $('#selBucket').addEventListener('change', e => {
+    S.bucket = parseFloat(e.target.value);
+    S.bucketBy[S.sym] = S.bucket;            // 分桶逐標的記
+    savePref({ ...loadPref(), bucketBy: S.bucketBy });
+    render();
+  });
   $('#rngBeta').addEventListener('input', e => {
     S.beta = +e.target.value; $('#valBeta').textContent = S.beta.toFixed(1); renderSoon();
   });
+  // 存檔放在 change（放開滑鼠）而不是 input，不然拖一次會寫幾十筆
+  $('#rngBeta').addEventListener('change', () => savePref({ ...loadPref(), beta: S.beta }));
   // 表格展開時才補畫（收起來的時候 drawTable / drawExpTable 會直接跳過）
   $('#dTable').addEventListener('toggle', () => {
     if ($('#dTable').open) { if (tblDirty) drawTable(buckets()); }
