@@ -1018,20 +1018,14 @@ function methodology() {
 }
 
 function mountExpiries() {
+  // 所有標的一律用下拉：到期別多寡不影響版面，頂欄永遠是同一條、同一個位置。
   const seg = $('#segExp'), sel = $('#selExp'), ex = S.data.expiries;
   if (!S.data.views[S.exp]) S.exp = 'ALL';
-  if (ex.length > (isNarrow() ? 5 : 12)) {    // 到期別太多（或螢幕太窄）就改用下拉
-    seg.style.display = 'none'; seg.innerHTML = '';   // 舊標的的按鈕不要留在 DOM 裡
-    sel.style.display = '';
-    sel.innerHTML = `<option value="ALL">合併（全部 ${ex.length} 個）</option>` +
-      ex.map(e => `<option value="${e.code}"${e.code === S.exp ? ' selected' : ''}>${e.ltd}　${e.kind}　${fmtK(e.oi)} 口</option>`).join('');
-  } else {
-    sel.style.display = 'none'; sel.innerHTML = '';
-    seg.style.display = '';
-    seg.innerHTML = `<button data-v="ALL">合併</button>` +
-      ex.map(e => `<button data-v="${e.code}" title="${e.kind}・到期 ${e.ltd}・${fmtK(e.oi)} 口">${e.ltd.slice(5)}</button>`).join('');
-    [...seg.querySelectorAll('button')].forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.exp));
-  }
+  seg.style.display = 'none'; seg.innerHTML = '';     // 舊標的的按鈕不要留在 DOM 裡
+  sel.style.display = '';
+  sel.innerHTML = `<option value="ALL">合併（全部 ${ex.length} 個）</option>` +
+    ex.map(e => `<option value="${e.code}"${e.code === S.exp ? ' selected' : ''}>${e.ltd}　${e.kind}　${fmtK(e.oi)} 口</option>`).join('');
+  sel.value = S.exp;
 }
 
 

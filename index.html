@@ -21,6 +21,13 @@
 :root[data-cvd="1"]{ --pos:#3987e5; --neg:#d95926; --call:#3987e5; --put:#d95926; --curve1:#3987e5; --curve2:#9085e9; }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
+/* 原生下拉選單：Windows/Chrome 會拿 select 自己的底色去畫展開後的清單。
+   .field select 是 background:none（透明）＝清單被畫成白底，配上淺色文字就看不見。
+   下面把 option 的底色與文字色寫死，並宣告 color-scheme，展開的清單才會是深色。 */
+select{color-scheme:dark}
+select option,select optgroup{background-color:#141d29;color:#e6edf3}
+select option:checked,select option:hover{background-color:#22304a;color:#ffffff}
+select option:disabled{color:#6b7a8a}
 body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);
   font-family:-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
   font-size:calc(14px * var(--fs)); line-height:1.55; -webkit-font-smoothing:antialiased}
