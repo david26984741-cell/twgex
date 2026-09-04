@@ -406,6 +406,7 @@ def _collapse_guard(args, sym, payload, hdir, before, day) -> None:
     它不知道有九成九的東西根本沒被抓進來。
 
     所以這裡比的是「跟自己的昨天比」，這是唯一能發現整批消失的角度。
+    正常的日間變動遠小於這個門檻（實測 ES 連續交易日之間未平倉變動在 5% 以內）。
     真的遇到合約大量到期而合理縮水時，加 --allow-stale-oi 放行。
     """
     if not before:
@@ -425,7 +426,8 @@ def _collapse_guard(args, sym, payload, hdir, before, day) -> None:
         a, b = old.get(key), now.get(key)
         if not a or b is None:
             continue
-        checks.append((label, a, b, b / a))
+        r = b / a
+        checks.append((label, a, b, r))
     bad = [c for c in checks if c[3] < COLLAPSE_MIN]
     if not bad:
         return
@@ -433,8 +435,8 @@ def _collapse_guard(args, sym, payload, hdir, before, day) -> None:
              for lab, a, b, r in checks]
     msg = (f"{sym}: 抓回來的量比前一個交易日塌掉一半以上，判定是殘缺的一份，不產出。\n"
            + "\n".join(lines)
-           + "\n    最可能是來源那邊某幾批序列沒抓到（ES 2026/09/03 就這樣掉了 99.5%）。"
-           + "\n    重跑一次通常就好；確定這次縮水是合理的，加 --allow-stale-oi 放行。")
+           + f"\n    最可能是來源那邊某幾批序列沒抓到（ES 2026/09/03 就這樣掉了 99.5%）。\n"
+           + f"    重跑一次通常就好；確定這次縮水是合理的，加 --allow-stale-oi 放行。")
     if not args.allow_stale_oi:
         raise SystemExit("  " + msg)
     print("  警告：" + msg, file=sys.stderr)
