@@ -225,6 +225,87 @@ def chain_tests():
           abs(st3["C"]["settle"] - 9.1) < 1e-9 and m3["spot"] == 765.07,
           f"買權 {st3['C']['settle']} / 標的 {m3['spot']}")
 
+    # --- 報價換日：用 put-call parity 反解遠期，挑貼現貨的那個欄位 ---
+    # 2026/09/02 真實踩到的坑：標的的 prev_day_close 已經滾到當天收盤，
+    # 但每一檔選擇權的 prev_day_close 還停在前一天，做出來是
+    # 「今天的現貨 ＋ 今天的未平倉 ＋ 昨天的選擇權報價」。
+    def _chain(spot_close, fwd_prev, fwd_mid, exp="260904", root="SPY   ",
+               ks=range(756, 776)):
+        """照著指定的遠期價造一條合成鏈：C − P + K 會等於那個遠期。"""
+        opts = []
+        for K in ks:
+            for cp, f in (("C", 1.0), ("P", -1.0)):
+                # 隨便給一個滿足 parity 的價：內含價的一半當時間價值，兩邊加一樣多
+                tv = 2.0
+                intr_prev = max(f * (fwd_prev - K), 0.0)
+                intr_mid = max(f * (fwd_mid - K), 0.0)
+                # 用 C−P = F−K 直接構造：買權 = tv + max(F−K,0)、賣權 = tv + max(K−F,0)
+                pv = tv + (fwd_prev - K if cp == "C" else K - fwd_prev) / 2.0 + \
+                     abs(fwd_prev - K) / 2.0
+                md = tv + (fwd_mid - K if cp == "C" else K - fwd_mid) / 2.0 + \
+                     abs(fwd_mid - K) / 2.0
+                del intr_prev, intr_mid
+                opts.append({"option": f"{root}{exp}{cp}{int(K*1000):08d}",
+                             "prev_day_close": round(pv, 4),
+                             "bid": round(md - 0.05, 4), "ask": round(md + 0.05, 4),
+                             "last_trade_price": round(md, 4),
+                             "open_interest": 100, "volume": 1})
+        return {"timestamp": "2026-09-03 03:57:46",
+                "data": {"symbol": "SPY", "close": spot_close,
+                         "current_price": spot_close, "prev_day_close": spot_close,
+                         "last_trade_time": "2026-09-02T15:59:59", "options": opts}}
+
+    # 先確認合成鏈本身的 parity 是對的
+    _p = _chain(765.16, 761.08, 765.40)
+    f_prev, n_prev = cboe.parity_forward(_p, "prev_close", 765.16, after="20260902")
+    f_mid, n_mid = cboe.parity_forward(_p, "mid", 765.16, after="20260902")
+    check("parity 反解得出遠期（prev_day_close 欄）",
+          f_prev is not None and abs(f_prev - 761.08) < 0.01 and n_prev >= 5,
+          f"{f_prev}（{n_prev} 對）")
+    check("parity 反解得出遠期（買賣中價欄）",
+          f_mid is not None and abs(f_mid - 765.40) < 0.01 and n_mid >= 5,
+          f"{f_mid}（{n_mid} 對）")
+
+    # 情境一：2026/09/02 —— 選擇權的 prev_day_close 還沒換日，必須改用中價
+    pk = cboe.pick_price_field(_p, 765.16, after="20260902")
+    check("報價沒換日時改用買賣中價", pk["field"] == "mid",
+          f"選到 {pk['field']}，prev 差 {pk['candidates']['prev_close']['rel']*100:+.2f}%、"
+          f"中價差 {pk['candidates']['mid']['rel']*100:+.2f}%")
+
+    # 情境二：隔天早上 CBOE 已經換日、中價是盤前的雜訊 → 要選回 prev_close
+    _p2 = _chain(765.16, 765.12, 770.90)
+    pk2 = cboe.pick_price_field(_p2, 765.16, after="20260902")
+    check("報價已換日時選回 prev_day_close", pk2["field"] == "prev_close",
+          f"選到 {pk2['field']}")
+
+    # 情境三：兩邊都對不上 → 不給答案，交給呼叫端擋
+    _p3 = _chain(765.16, 750.00, 780.00)
+    pk3 = cboe.pick_price_field(_p3, 765.16, after="20260902")
+    check("兩個欄位都偏離時超出容忍值",
+          pk3["field"] is not None and abs(pk3["rel"]) > cboe.FWD_TOL,
+          f"最接近的仍差 {pk3['rel']*100:+.2f}%（容忍 {cboe.FWD_TOL*100:.2f}%）")
+
+    # 情境四：已到期的序列不可以拿來當判準（它的 prev_day_close 永遠停在舊值）
+    _p4 = _chain(765.16, 700.00, 765.30, exp="260902")      # 已在 09/02 到期
+    f4, n4 = cboe.parity_forward(_p4, "prev_close", 765.16, after="20260902")
+    check("已到期的序列被排除在 parity 判準之外", f4 is None and n4 == 0,
+          f"{f4}（{n4} 對）")
+
+    # 情境五：SPX 的 AM / PM 兩批序列不可以互相配對
+    _mix = _chain(7666.60, 7660.0, 7666.5, exp="260918", root="SPX   ",
+                  ks=range(7600, 7620, 5))
+    _mix2 = _chain(7666.60, 7666.5, 7666.5, exp="260918", root="SPXW",
+                   ks=range(7600, 7620, 5))
+    _mix["data"]["options"] += _mix2["data"]["options"]
+    roots = set()
+    for _o in _mix["data"]["options"]:
+        roots.add(cboe.osi_root(_o["option"]))
+    check("合成鏈確實含 SPX 與 SPXW 兩個根碼", roots == {"SPX", "SPXW"}, str(sorted(roots)))
+    f5, n5 = cboe.parity_forward(_mix, "prev_close", 7666.60, after="20260902", n_exp=1)
+    check("AM / PM 分開配對，不會混出中間值",
+          f5 is not None and (abs(f5 - 7660.0) < 0.01 or abs(f5 - 7666.5) < 0.01),
+          f"{f5}（{n5} 對；混在一起會落在 7660~7666.5 之間）")
+
     # --- 未平倉日期的反推要看假日表 ---
     pay3 = {"data": {"options": [
         {"option": "SPY   260826C00760000", "open_interest": 1000},

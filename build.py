@@ -206,6 +206,42 @@ def load_us(args, sym):
         print(f"  註：{sym} 這份檔案的 prev_day_close 已經滾到 {sess} 收盤"
               f"（現價 {st['current_price']} ＝ 前收 {st['prev_day_close']}），"
               f"價格日期按 {sess} 算。", file=sys.stderr)
+
+    # ── 選擇權報價要取哪一欄：用 put-call parity 對照現貨決定 ─────────────────
+    # 標的的 prev_day_close 收盤就滾、每一檔選擇權的要隔天早上才滾，兩者不同步，
+    # 中間那段空窗抓到的就是「今天的現貨 ＋ 昨天的選擇權報價」。
+    # parity 遠期只由選擇權報價決定，拿它跟現貨比就查得出來。詳見 cboe.pick_price_field。
+    ref_spot = (st["prev_day_close"] if use_prev else
+                (st["close"] or st["current_price"] or st["prev_day_close"]))
+    # after 一定要給：已到期的序列不再更新，prev_day_close 永遠停在舊值，
+    # 拿它當判準會得到完全錯誤的遠期
+    pick = cboe.pick_price_field(payload, ref_spot, after=(sess or session))
+    price_field = pick["field"]
+    def _fmt(c):
+        return ("無" if c["fwd"] is None else
+                f"{c['fwd']:,.2f}（差 {c['rel']*100:+.2f}%，{c['n_pairs']} 對）")
+    pick_line = (f"{sym}: 現貨 {ref_spot}｜"
+                 f"prev_day_close→遠期 {_fmt(pick['candidates']['prev_close'])}｜"
+                 f"買賣中價→遠期 {_fmt(pick['candidates']['mid'])}"
+                 f" → 採用 {price_field or '（都不可信）'}")
+    print("  " + pick_line, file=sys.stderr)
+    if price_field is None or abs(pick["rel"]) > cboe.FWD_TOL:
+        msg = (f"{sym}: 兩個價格欄位反解出來的遠期都對不上現貨，不產出。\n"
+               f"    {pick_line}\n"
+               f"    容忍值 {cboe.FWD_TOL*100:.2f}%。這通常表示 CBOE 那份檔案停更、\n"
+               f"    或抓在某個兩邊都還沒對齊的時點；等下一班再跑即可。\n"
+               f"    要強行產出請加 --allow-stale-oi。")
+        if not args.allow_stale_oi:
+            raise SystemExit("  " + msg)
+        print("  警告：" + msg, file=sys.stderr)
+        price_field = price_field or ("prev_close" if use_prev else "mid")
+    if use_prev and price_field == "mid":
+        _pr = pick["candidates"]["prev_close"]["rel"]
+        _pr = "無法計算" if _pr is None else f"{_pr*100:+.2f}%"
+        print(f"  註：{sym} 的選擇權 prev_day_close 還沒換日（遠期差 {_pr}），"
+              f"改用剛收完那個場次的買賣中價——這兩者是同一個場次的收盤，"
+              f"跟 OCC 當天的未平倉對得上。", file=sys.stderr)
+
     cboe_oi_day = cboe.oi_as_of(payload, sess or session or "99999999", prev_td=prev)
 
     # ── 未平倉來源 ───────────────────────────────────────────────────────────
@@ -265,8 +301,17 @@ def load_us(args, sym):
     forced = oi_day or price_day or session
     chain_all, meta = cboe.parse_chain(
         payload, forced, am_roots=spec0.get("am_roots", ()),
-        prev_td=prev, use_prev_close=use_prev, oi_override=oi_override)
+        prev_td=prev, use_prev_close=use_prev, price_field=price_field,
+        oi_override=oi_override)
     meta["price_day"] = price_day
+    meta["fwd_check"] = {"ref_spot": ref_spot, "field": price_field,
+                         "fwd": pick["fwd"], "rel": pick["rel"]}
+    # 改用中價時，少數合約可能連買賣報價都沒有而被跳過（實測 SPX 約 0.7%、SPY 0%）。
+    # 這裡不做價格來源的混搭——寧可少幾檔，也不要一張圖裡混到兩天的報價。
+    if meta.get("n_no_price"):
+        print(f"  註：{sym} 有 {meta['n_no_price']:,} 個有部位的合約在"
+              f"「{meta.get('price_basis')}」這一欄沒有價格，已跳過"
+              f"（共 {meta.get('n_contracts_used', 0):,} 檔進圖）。", file=sys.stderr)
     if oi_override is not None and meta.get("n_oi_lost"):
         print(f"  註：{sym} 有 {meta['n_oi_lost']:,} 個合約 CBOE 有部位但 OCC 查不到"
               f"（2026/08/28 逐檔實測應該是 0，數字不對就要看一眼）。", file=sys.stderr)
@@ -308,6 +353,7 @@ def load_us(args, sym):
              "snapshot_at": meta.get("quote_time"), "snapshot": meta.get("snapshot"),
              "iv30": meta.get("iv30"), "n_contracts_all": meta.get("n_contracts_all"),
              "price_basis": meta.get("price_basis"), "session_day": fmt_date(sess),
+             "fwd_check": meta.get("fwd_check"), "n_no_price": meta.get("n_no_price"),
              "oi_as_of": fmt_date(oi_day or price_day), "price_as_of": fmt_date(price_day),
              "oi_source": meta.get("oi_source"), "n_oi_lost": meta.get("n_oi_lost")}
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra

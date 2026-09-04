@@ -81,6 +81,101 @@ def _mid(bid, ask, last) -> Optional[float]:
     return None
 
 
+PRICE_FIELDS = ("prev_close", "mid")
+# 遠期與現貨的容忍值。實測正常日 |F/S-1| 落在 0.20% 以內（QQQ 2026/08/27 是 −0.20%），
+# 報價沒換日那天是 0.53%（SPY 2026/09/02）。兩者會擦邊，所以判斷**不是**單看門檻，
+# 而是「兩個欄位都算一次、挑貼現貨的那個」，門檻只當最後的安全網。
+FWD_TOL = 0.0035
+
+
+def _px_of(o: dict, field: str) -> Optional[float]:
+    """從一檔報價裡取價：field='prev_close' 用 prev_day_close，'mid' 用買賣中價。"""
+    if field == "prev_close":
+        v = o.get("prev_day_close")
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v > 0 else None
+    return _mid(o.get("bid"), o.get("ask"), o.get("last_trade_price"))
+
+
+def parity_forward(payload: dict, field: str, spot: float,
+                   after: Optional[str] = None, n_exp: int = 3,
+                   band: float = 0.02) -> Tuple[Optional[float], int]:
+    """用 put-call parity 反解遠期價：F ≈ C − P + K，取價平附近履約價的中位數。
+
+    這是一個**只由選擇權報價決定**的量，跟標的報價完全獨立，所以拿它跟現貨對照，
+    就能查出「這批報價是不是跟現貨同一個場次」。折現因子在近月可忽略
+    （一天期 4% 利率只有 0.01%），我們要抓的是 0.2% 以上的差距。
+
+    after: 只看到期日「嚴格大於」這個日期的序列。已到期的序列不再更新，
+      它的 prev_day_close 會永遠停在舊值，一定要排除。
+    回傳 (遠期價, 用到的履約價對數)。對數太少就不可信。
+    """
+    if not spot or spot <= 0:
+        return None, 0
+    pairs: Dict[Tuple[str, str], Dict[str, Dict[str, float]]] = {}
+    for o in (payload.get("data") or {}).get("options") or []:
+        code = o.get("option") or ""
+        if len(code) < 16:
+            continue
+        exp, cp, K = parse_osi(code)
+        if after and exp <= after:
+            continue
+        if abs(K / spot - 1.0) > band:
+            continue
+        px = _px_of(o, field)
+        if px is None:
+            continue
+        # 根碼一起當 key：SPX 與 SPXW 同一天到期但是兩批不同的序列，不能混著配對
+        pairs.setdefault((osi_root(code), exp), {}).setdefault(str(K), {})[cp] = px
+    fwds = []
+    for (_root, _exp) in sorted(pairs, key=lambda t: t[1])[:n_exp]:
+        for ks, cpx in pairs[(_root, _exp)].items():
+            if "C" in cpx and "P" in cpx:
+                fwds.append(cpx["C"] - cpx["P"] + float(ks))
+    if not fwds:
+        return None, 0
+    fwds.sort()
+    return fwds[len(fwds) // 2], len(fwds)
+
+
+def pick_price_field(payload: dict, spot: float,
+                     after: Optional[str] = None) -> dict:
+    """決定這份檔案該用哪個價格欄位，並回報兩個欄位各自的 parity 遠期。
+
+    **為什麼需要這一步（2026/09/02 踩到的坑）。** CBOE 這份檔案裡，
+    `data.prev_day_close`（標的）在場次一結束就滾成當天收盤，
+    但**每一檔選擇權自己的** `prev_day_close` 要等美東隔天早上才滾，
+    而且各標的、各序列滾的時間還不一樣（2026/09/04 07:10 實測：
+    SPX 與 QQQ 已經滾了、SPY 還沒）。
+    於是在「美東傍晚～半夜」這段（正是台北早上九點那班）抓到的會是
+    今天的現貨 ＋ 今天的未平倉 ＋ **昨天的選擇權報價**。
+    原本的對齊檢查看的是標的，標的確實滾了，所以整個檢查形同虛設。
+
+    同一份檔案裡的**買賣中價就是剛收完那個場次的收盤報價**（實測 2026/09/03 與 09/04
+    連續兩天，SPY / QQQ / SPX 都成立），所以正解不是換排程，而是：
+    兩個欄位都用 parity 算一次遠期，挑貼現貨的那個。這個判準在任何時點都成立——
+    盤中的中價是即時價，反而會偏離「前一收盤」的現貨，那時自然就選回 prev_close。
+    """
+    out = {"spot": spot, "candidates": {}, "field": None, "fwd": None,
+           "rel": None, "n_pairs": 0}
+    best = None
+    for f in PRICE_FIELDS:
+        fwd, n = parity_forward(payload, f, spot, after=after)
+        rel = None if (fwd is None or not spot) else fwd / spot - 1.0
+        out["candidates"][f] = {"fwd": fwd, "rel": rel, "n_pairs": n}
+        # 樣本太少不採信（正常一個到期別價平 ±2% 就有數十對）
+        if fwd is None or n < 5:
+            continue
+        if best is None or abs(rel) < abs(best[2]):
+            best = (f, fwd, rel, n)
+    if best:
+        out["field"], out["fwd"], out["rel"], out["n_pairs"] = best
+    return out
+
+
 def oi_as_of(payload: dict, today: str, prev_td=None) -> Optional[str]:
     """從資料本身推斷「這批未平倉量是哪一天收盤的」。
 
@@ -180,6 +275,7 @@ def snapshot_state(payload: dict) -> dict:
 def parse_chain(payload: dict, trade_day: Optional[str] = None,
                 am_roots: tuple = (), prev_td=None,
                 use_prev_close: bool = False,
+                price_field: Optional[str] = None,
                 oi_override: Optional[dict] = None) -> Tuple[Dict[str, dict], dict]:
     """回傳 (chain, meta)。chain 的結構跟 taifex.parse_options 的單日區塊一致，
     可以直接餵給 engine.build_legs。
@@ -218,6 +314,12 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
             x -= dt.timedelta(days=1)
         return x
     d = payload.get("data") or {}
+    # 兩件事要分開：
+    #   use_prev_close 決定**標的價**取哪一個（收盤模式 vs 盤中即時模式）；
+    #   price_field   決定**選擇權報價**取哪一個欄位（由 pick_price_field 用 parity 挑）。
+    # 以前這兩件事綁在同一個布林上，正是 2026/09/02 那張拼裝圖的成因：
+    # 標的滾到當天收盤了，選擇權的 prev_day_close 還停在前一天。
+    field = price_field or ("prev_close" if use_prev_close else "mid")
     if use_prev_close:
         spot = d.get("prev_day_close")
     else:
@@ -242,11 +344,7 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
         n_all += 1
         if oi <= 0:
             continue
-        if use_prev_close:
-            px = o.get("prev_day_close")
-            px = float(px) if px not in (None, "") else None
-        else:
-            px = _mid(o.get("bid"), o.get("ask"), o.get("last_trade_price"))
+        px = _px_of(o, field)
         if px is None or px <= 0:
             n_noprice += 1
             continue
@@ -267,7 +365,7 @@ def parse_chain(payload: dict, trade_day: Optional[str] = None,
     meta = {"symbol": d.get("symbol"), "spot": spot, "trade_day": day,
             "session_day": session_day,
             "price_day": session_day,          # use_prev_close 時由呼叫端改成前一個交易日
-            "price_basis": "prev_close" if use_prev_close else "mid",
+            "price_basis": field,
             "quote_time": d.get("last_trade_time"), "snapshot": payload.get("timestamp"),
             "iv30": d.get("iv30"), "n_contracts_all": n_all, "n_contracts_used": n_used,
             "n_no_price": n_noprice,
