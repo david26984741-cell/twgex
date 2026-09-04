@@ -50,7 +50,10 @@ jobs:
       - name: 弄一份可攜式 Python
         run: |
           echo === proxy：%https_proxy%
-          if not exist pyemb.zip curl.exe -sSL --retry 2 -o pyemb.zip https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-embed-amd64.zip
+          rem --ssl-no-revoke：紅線走公司 proxy，Windows 的 schannel 連不到憑證撤銷伺服器，
+          rem 會回 curl: (35) CRYPT_E_REVOCATION_OFFLINE 直接失敗（2026/09/04 連兩次卡在這）。
+          rem 這個旗標只跳過「撤銷檢查」，憑證鏈本身照驗。
+          if not exist pyemb.zip curl.exe -sSL --ssl-no-revoke --retry 3 --retry-all-errors -o pyemb.zip https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-embed-amd64.zip
           if not exist pyemb.zip ( echo 下載 Python 失敗 & exit /b 1 )
           if exist pyemb rmdir /s /q pyemb
           mkdir pyemb
