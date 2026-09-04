@@ -391,6 +391,55 @@ def load_cme(args, sym):
     return day, chain, prev_oi, args.spot or meta.get("spot"), prior, extra
 
 
+# 抓到的量比前一天少這麼多就當成殘缺，不放行
+COLLAPSE_MIN = 0.50
+
+
+def _collapse_guard(args, sym, payload, hdir, before, day) -> None:
+    """跟前一個交易日比，未平倉總量或到期別數塌掉一半以上就不產出。
+
+    **2026/09/03 的 ES 真的發生過。** 那天抓回來只剩 4 個到期別、292 個契約、
+    未平倉 24,530 口，而前一天是 59 個到期別、10,741 個契約、4,748,217 口——
+    只剩 0.5%，而且留下來的四批全是 2027/2028 的遠月，近月整批不見。
+    上線的圖因此變成一張沒有意義的圖，而**當時沒有任何一道檢查擋得住**：
+    `oi_coverage` 算的是「拿到的那些裡面有多少可用」（0.99996，看起來很健康），
+    它不知道有九成九的東西根本沒被抓進來。
+
+    所以這裡比的是「跟自己的昨天比」，這是唯一能發現整批消失的角度。
+    真的遇到合約大量到期而合理縮水時，加 --allow-stale-oi 放行。
+    """
+    if not before:
+        return                                   # 第一天沒得比
+    prev_day = before[-1]
+    if prev_day >= day:
+        return                                   # 重跑同一天或補舊資料，不比
+    try:
+        with open(os.path.join(hdir, prev_day + ".json"), encoding="utf-8") as fh:
+            old = json.load(fh)["meta"]
+    except Exception:                            # noqa: BLE001
+        return
+    now = payload["meta"]
+    checks = []
+    for key, label in (("oi_total", "未平倉總量"), ("n_expiries", "到期別數"),
+                       ("n_legs", "契約數")):
+        a, b = old.get(key), now.get(key)
+        if not a or b is None:
+            continue
+        checks.append((label, a, b, b / a))
+    bad = [c for c in checks if c[3] < COLLAPSE_MIN]
+    if not bad:
+        return
+    lines = [f"    {lab}：{prev_day} 是 {a:,} → 這次只有 {b:,}（剩 {r*100:.1f}%）"
+             for lab, a, b, r in checks]
+    msg = (f"{sym}: 抓回來的量比前一個交易日塌掉一半以上，判定是殘缺的一份，不產出。\n"
+           + "\n".join(lines)
+           + "\n    最可能是來源那邊某幾批序列沒抓到（ES 2026/09/03 就這樣掉了 99.5%）。"
+           + "\n    重跑一次通常就好；確定這次縮水是合理的，加 --allow-stale-oi 放行。")
+    if not args.allow_stale_oi:
+        raise SystemExit("  " + msg)
+    print("  警告：" + msg, file=sys.stderr)
+
+
 def _cme_oi_guard(args, meta) -> None:
     """成交量表還沒發布時，收集器會悄悄退回結算表的『前一日』未平倉。
 
@@ -541,6 +590,8 @@ def main() -> int:
     before = sorted(f[:-5] for f in os.listdir(hdir)
                     if f.endswith(".json") and f[:-5].isdigit())
     newest = before[-1] if before else None
+
+    _collapse_guard(args, sym, payload, hdir, before, day)
 
     # 歷史檔一律寫（同一天重跑就是覆蓋成最新的一份）
     with open(os.path.join(hdir, f"{day}.json"), "w", encoding="utf-8") as fh:
