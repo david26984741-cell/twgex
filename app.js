@@ -196,7 +196,8 @@ function renderSymNote(sym) {
    2026/09/03 實測：最近月佔 54%、總 VEX 比外部高 30%；前一天佔 33%、只高 15%。
    GEX 沒有這個問題——它是正負兩大團相減的殘差，對 T 的絕對敏感度低得多。
    四成以上就在卡片裡講出來：**總量不要跨日比，逐履約價的位置才是穩定的資訊**。 */
-const VEX_CONC_TH = 0.40;
+const VEX_CONC_TH = 0.40;      // 佔總 VEX 的比重門檻
+const VEX_NEAR_TD = 5;         // 「近月」的定義：剩幾個交易日以內
 
 function vexConcentration() {
   const d = S.data;
@@ -209,9 +210,15 @@ function vexConcentration() {
   for (const e of ex) tot += vexOf(e.totals || {}, sg);
   if (!isFinite(tot) || Math.abs(tot) < 1e-9) return null;
   const share = vexOf(ex[0].totals || {}, sg) / tot;
-  // 只在「同號而且佔比高」時提醒。異號代表互相抵消，那是另一種故事，不在這裡處理。
+  const days = ex[0].trading_days;
+  // 兩個條件都要成立才提醒：
+  //   1. 佔比高 —— 總量被單一到期別主導
+  //   2. 而且那一批**快到期了** —— 剩餘天數少的時候，vanna 對「最後一天怎麼算」才敏感
+  // 只有第 1 點不算問題：ES 的部位天生集中在遠月（實測最近的一批也還有 241 個交易日），
+  // 那種集中度不會讓總量逐日跳動，講出來只會變雜訊。
   if (!(share >= VEX_CONC_TH)) return null;
-  return { share, days: ex[0].trading_days, ltd: ex[0].ltd, kind: ex[0].kind };
+  if (!(days != null && days <= VEX_NEAR_TD)) return null;
+  return { share, days, ltd: ex[0].ltd, kind: ex[0].kind };
 }
 
 function paintVexNote() {
@@ -219,8 +226,7 @@ function paintVexNote() {
   const c = vexConcentration();
   if (!c) { el.style.display = 'none'; el.innerHTML = ''; return; }
   const d = c.days;
-  const dtxt = d == null ? '最近' : (d <= 1 ? '只剩不到 1 個交易日'
-                                            : `只剩 ${(+d).toFixed(0)} 個交易日`);
+  const dtxt = d <= 1 ? '只剩不到 1 個交易日' : `只剩 ${(+d).toFixed(0)} 個交易日`;
   el.style.display = '';
   el.innerHTML = `本日總 VEX 有 <b>${(c.share * 100).toFixed(0)}%</b> 來自 `
     + `<b>${c.ltd}</b> 到期那一批（${dtxt}）。越接近到期，vanna 對剩餘天數越敏感，`
