@@ -306,6 +306,73 @@ def chain_tests():
           f5 is not None and (abs(f5 - 7660.0) < 0.01 or abs(f5 - 7666.5) < 0.01),
           f"{f5}（{n5} 對；混在一起會落在 7660~7666.5 之間）")
 
+    # --- 整批塌掉的守門（ES 2026/09/03 真的發生過）---
+    import tempfile, shutil as _sh, json as _json, os as _os
+    _b = __import__('build')
+    class _A:
+        allow_stale_oi = False
+    def _mk(tmp, prev_meta, now_meta, day='20260903', prev='20260902'):
+        with open(_os.path.join(tmp, prev + '.json'), 'w', encoding='utf-8') as fh:
+            _json.dump({'meta': prev_meta}, fh)
+        return dict(args=_A(), sym='ES', payload={'meta': now_meta},
+                    hdir=tmp, before=[prev], day=day)
+    NORMAL = {'oi_total': 4748217, 'n_expiries': 59, 'n_legs': 10741}
+    tmp = tempfile.mkdtemp()
+    try:
+        # 真實案例：只剩 0.5% → 要擋
+        kw = _mk(tmp, NORMAL, {'oi_total': 24530, 'n_expiries': 4, 'n_legs': 292})
+        try:
+            _b._collapse_guard(**kw); ok = False; why = '沒擋'
+        except SystemExit as e:
+            ok = '塌掉一半以上' in str(e) and '0.5%' in str(e); why = str(e)[:70]
+        check('整批塌掉會被擋下來（ES 2026/09/03 的真實數字）', ok, why)
+
+        # 正常的日間變動 → 要放行
+        kw = _mk(tmp, NORMAL, {'oi_total': 4600000, 'n_expiries': 58, 'n_legs': 10500})
+        try:
+            _b._collapse_guard(**kw); ok = True
+        except SystemExit as e:
+            ok = False
+        check('正常的日間變動照樣放行', ok, '未平倉 −3%、到期別 59→58')
+
+        # 剛好在門檻邊上（50%）→ 不擋
+        kw = _mk(tmp, NORMAL, {'oi_total': int(4748217*0.5)+1, 'n_expiries': 30, 'n_legs': 5400})
+        try:
+            _b._collapse_guard(**kw); ok = True
+        except SystemExit:
+            ok = False
+        check('剛好落在 50% 門檻上不擋', ok, '門檻是「低於 50%」才擋')
+
+        # 加了 --allow-stale-oi 可以放行
+        class _A2(_A): allow_stale_oi = True
+        kw = _mk(tmp, NORMAL, {'oi_total': 24530, 'n_expiries': 4, 'n_legs': 292})
+        kw['args'] = _A2()
+        try:
+            _b._collapse_guard(**kw); ok = True
+        except SystemExit:
+            ok = False
+        check('加了 --allow-stale-oi 可以強行放行', ok)
+
+        # 第一天（沒有前一日）不擋
+        kw = _mk(tmp, NORMAL, {'oi_total': 1, 'n_expiries': 1, 'n_legs': 1})
+        kw['before'] = []
+        try:
+            _b._collapse_guard(**kw); ok = True
+        except SystemExit:
+            ok = False
+        check('第一天沒有前一日可比，不擋', ok)
+
+        # 重跑同一天不擋（day == prev）
+        kw = _mk(tmp, NORMAL, {'oi_total': 24530, 'n_expiries': 4, 'n_legs': 292},
+                 day='20260902', prev='20260902')
+        try:
+            _b._collapse_guard(**kw); ok = True
+        except SystemExit:
+            ok = False
+        check('重跑同一天不比對（避免自己擋自己）', ok)
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
     # --- 未平倉日期的反推要看假日表 ---
     pay3 = {"data": {"options": [
         {"option": "SPY   260826C00760000", "open_interest": 1000},
