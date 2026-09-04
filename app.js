@@ -190,6 +190,43 @@ function renderSymNote(sym) {
     + (m.prev_trade_date ? `<br>OI 增減對比 ${m.prev_trade_date}` : '') + `</div>`;
 }
 
+/* VEX 的量常常高度集中在「最近一個到期別」。那批只剩一兩個交易日時，
+   vanna 對「最後一天怎麼算」極度敏感（把最近月的 T 少算一天，總 VEX 會差三成），
+   所以總量會逐日大幅跳動，也是跟外部來源對照時差異的主要來源。
+   2026/09/03 實測：最近月佔 54%、總 VEX 比外部高 30%；前一天佔 33%、只高 15%。
+   GEX 沒有這個問題——它是正負兩大團相減的殘差，對 T 的絕對敏感度低得多。
+   四成以上就在卡片裡講出來：**總量不要跨日比，逐履約價的位置才是穩定的資訊**。 */
+const VEX_CONC_TH = 0.40;
+
+function vexConcentration() {
+  const d = S.data;
+  if (!d || S.exp !== 'ALL' || !Array.isArray(d.expiries) || !d.expiries.length) return null;
+  const sg = SIGNS[S.sign];
+  // 一定要用 ltd（到期日）排，不能用 code——台指的 code 是 202609F1 / 202609W2 這種格式，
+  // 字典序排出來月選會跑到週選前面，抓到的「最近月」就是錯的
+  const ex = [...d.expiries].sort((a, b) => (a.ltd < b.ltd ? -1 : a.ltd > b.ltd ? 1 : 0));
+  let tot = 0;
+  for (const e of ex) tot += vexOf(e.totals || {}, sg);
+  if (!isFinite(tot) || Math.abs(tot) < 1e-9) return null;
+  const share = vexOf(ex[0].totals || {}, sg) / tot;
+  // 只在「同號而且佔比高」時提醒。異號代表互相抵消，那是另一種故事，不在這裡處理。
+  if (!(share >= VEX_CONC_TH)) return null;
+  return { share, days: ex[0].trading_days, ltd: ex[0].ltd, kind: ex[0].kind };
+}
+
+function paintVexNote() {
+  const el = $('#noteVex'); if (!el) return;
+  const c = vexConcentration();
+  if (!c) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const d = c.days;
+  const dtxt = d == null ? '最近' : (d <= 1 ? '只剩不到 1 個交易日'
+                                            : `只剩 ${(+d).toFixed(0)} 個交易日`);
+  el.style.display = '';
+  el.innerHTML = `本日總 VEX 有 <b>${(c.share * 100).toFixed(0)}%</b> 來自 `
+    + `<b>${c.ltd}</b> 到期那一批（${dtxt}）。越接近到期，vanna 對剩餘天數越敏感，`
+    + `<b>總量不適合跨日比較</b>；下面逐履約價的位置仍然可靠。`;
+}
+
 /* 卡片右上角那幾顆膠囊。單位固定、顯示區間會變，所以每次重畫都叫一次。 */
 function pills() {
   const m = S.data && S.data.meta; if (!m) return;
@@ -197,6 +234,7 @@ function pills() {
   // 單位已經畫在圖裡的軸標題上了，膠囊不要再重複一次
   $('#nGex').textContent = `圖表顯示${spotWord()} ±${band}%`;
   $('#nVex').textContent = '負值代表波動放大情境';
+  paintVexNote();
   $('#nCurve').textContent = `Sticky IV　·　β = ${S.beta.toFixed(1)}`;
   $('#nSum').textContent = (S.exp === 'ALL' ? '' : S.exp + '　·　')
     + `${fmtK(m.n_legs)} 份契約　·　${m.n_expiries} 個到期日`;
@@ -1319,7 +1357,10 @@ const CARD_HELP = {
     + '長條特別長的價位，代表標的走到那附近時造市商要調整的量最大，行情容易在那裡卡住或加速。' },
   'c-vex': { t: '各履約價 VEX', a: 'g-vex', h:
     '同樣逐履約價，但看的是<b>波動率</b>變動造成的避險流量。'
-    + '多半整片是負的，所以重點一樣放在「哪幾根特別深」，那是波動一旦擴大時壓力最集中的位置。' },
+    + '多半整片是負的，所以重點一樣放在「哪幾根特別深」，那是波動一旦擴大時壓力最集中的位置。<br><br>'
+    + '<b>總量不要跨日比。</b>VEX 用的 vanna 對「離到期還有幾天」很敏感，'
+    + '而它的量常常有一半來自最近那個到期別；那批剩一兩天時，總量會逐日大幅跳動。'
+    + '集中度過高時卡片上會直接標出來。逐履約價的位置不受這個影響。' },
   'c-curve': { t: 'GEX 與 GEX+ 曲線', a: 'g-curve', h:
     '假設標的平移到各個價位、<b>重新把整本選擇權簿算一次</b>，畫出總量怎麼變。<br><br>'
     + '曲線跟零軸的交點，就是上面那兩個 Flip。曲線越陡，代表那一段價格區間的結構變化越劇烈。' },

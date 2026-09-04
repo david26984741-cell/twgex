@@ -113,6 +113,11 @@ h1{font-size:calc(19px * var(--fs));font-weight:700;margin:0;letter-spacing:.03e
 .iq:hover,.iq[aria-expanded="true"]{background:#25405c;border-color:var(--accent);color:#dcecfb}
 .iq:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .legend{display:flex;gap:6px 14px;flex-wrap:wrap;margin:2px 0;font-size:calc(11.5px * var(--fs));color:var(--ink2)}
+/* 卡片內的小提醒（目前用在 VEX 集中度）。比 .notice 低調，因為它不是錯誤、是讀圖注意事項 */
+.cardnote{background:#211a0c;border:1px solid #4a3c19;border-radius:8px;
+  padding:6px 9px;margin:6px 0 2px;color:#dcc999;line-height:1.65;
+  font-size:calc(11.5px * var(--fs))}
+.cardnote b{color:#f2e0b4;font-variant-numeric:tabular-nums}
 .legend .it{display:inline-flex;align-items:center;white-space:nowrap}
 .legend i{display:inline-block;width:13px;height:3px;border-radius:2px;margin-right:5px;flex:0 0 auto}
 .legend i.d{height:0;border-top:2px dashed currentColor;border-radius:0;background:none!important}
@@ -312,6 +317,7 @@ tbody tr:hover{background:#141d29}
           <button class="iq" type="button" data-help="c-vex" aria-expanded="false" aria-label="VEX 圖說明">i</button></div>
       </div>
       <div class="legend" id="lgVex"></div>
+      <div class="cardnote" id="noteVex" style="display:none"></div>
       <div id="chVex"></div>
     </div>
     <div class="panel">
@@ -417,6 +423,6 @@ tbody tr:hover{background:#141d29}
 <div id="tip"></div>
 <!-- ?v= 是快取戳記：app.js 一改就要換掉這串，否則瀏覽器會繼續用舊的 app.js
      （改法：md5sum app.js 取前 8 碼貼進來） -->
-<script src="app.js?v=a2027692"></script>
+<script src="app.js?v=df4fa7f7"></script>
 </body>
 </html>
