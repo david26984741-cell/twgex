@@ -142,6 +142,15 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
     n_all = n_used = 0
     tried = 0
     n_merged = n_fellback = 0
+    # 這一輪「該抓到」與「真的抓到」的系列數。
+    # 【2026/09/05~07 踩到的坑】底下那兩個 continue 會把抓失敗的系列無聲丟掉：
+    # _get 自己重試三次仍失敗 → 這個系列直接不見，而且沒有任何計數或訊息。
+    # 公司 proxy 一不穩就會掉掉幾十個系列，做出來的是一張「只有 8~16% 部位」的圖，
+    # 但 oi_coverage 看起來還是 0.9999（它算的是拿到的那些裡面有多少可用）。
+    # 所以一定要把「掉了幾個」記下來，交給 build.py 判斷要不要產出。
+    n_series = 0
+    n_series_ok = 0
+    lost_codes = []
     fb_oi = 0
     fb_codes = []
     rt_lock = ""
@@ -149,6 +158,7 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
         ltd = _parse_last_trade(s["last_trade"])
         if ltd is None or ltd.strftime("%Y%m%d") <= trade_day:
             continue                                  # 已到期 / 當日到期一律排除
+        n_series += 1
         rows = []
         used_pid = None
         for pid in s["pids"]:                         # 系列碼與 productId 的配對不固定，逐一試
@@ -165,7 +175,9 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
                 break
             time.sleep(pause)
         if not rows:
+            lost_codes.append(s["code"])          # 抓不到＝掉了，不可以無聲跳過
             continue
+        n_series_ok += 1
         vo = fetch_volume_oi(used_pid, s["code"], trade_day, s.get("month", ""), rt_lock)
         tried += 1
         if vo:
@@ -217,6 +229,8 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
             "oi_asof": "close" if n_merged else "prev",
             "oi_report": rt_lock, "oi_merged": n_merged, "oi_fellback": n_fellback,
             "oi_fellback_oi": fb_oi, "oi_fellback_codes": fb_codes,
+            "n_series": n_series, "n_series_ok": n_series_ok,
+            "n_series_lost": len(lost_codes), "lost_codes": lost_codes[:40],
             "oi_total": oi_tot}
     return chain, meta
 

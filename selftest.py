@@ -306,6 +306,39 @@ def chain_tests():
           f5 is not None and (abs(f5 - 7660.0) < 0.01 or abs(f5 - 7666.5) < 0.01),
           f"{f5}（{n5} 對；混在一起會落在 7660~7666.5 之間）")
 
+    # --- 掉系列的守門（ES 2026/09/05~07 連三天）---
+    _bb = __import__('build')
+    class _S:
+        allow_stale_oi = False
+    class _S2(_S):
+        allow_stale_oi = True
+    def _try(meta, args=None):
+        try:
+            _bb._cme_series_guard(args or _S(), 'ES', meta)
+            return None
+        except SystemExit as e:
+            return str(e)
+    # 09/07 的真實比例：只抓到 8.6% 的部位 → 系列也掉了大半
+    r = _try({'n_series': 59, 'n_series_lost': 51, 'lost_codes': ['EW1U26', 'EW2U26']})
+    check('掉太多系列會被擋下來', r is not None and '86.4%' in r, (r or '')[:70])
+    # 掉一兩個是常態（有些系列本來就沒報價），要放行
+    r = _try({'n_series': 59, 'n_series_lost': 4, 'lost_codes': ['EW1U26']})
+    check('只掉少數幾個照樣產出', r is None, '4/59 = 6.8%，在 10% 門檻內')
+    # 剛好在門檻上
+    r = _try({'n_series': 100, 'n_series_lost': 10, 'lost_codes': []})
+    check('剛好 10% 不擋', r is None, '門檻是「超過 10%」才擋')
+    r = _try({'n_series': 100, 'n_series_lost': 11, 'lost_codes': []})
+    check('超過 10% 就擋', r is not None)
+    # 一個都沒掉
+    r = _try({'n_series': 59, 'n_series_lost': 0, 'lost_codes': []})
+    check('一個都沒掉時不吭聲', r is None)
+    # --json 餵檔的舊路徑沒有這些欄位，不可以因此炸掉
+    r = _try({'n_contracts_all': 100})
+    check('舊路徑（--json）沒有系列計數時不擋', r is None)
+    # 強制放行
+    r = _try({'n_series': 59, 'n_series_lost': 51, 'lost_codes': []}, _S2())
+    check('加了 --allow-stale-oi 可以強行放行（掉系列）', r is None)
+
     # --- 整批塌掉的守門（ES 2026/09/03 真的發生過）---
     import tempfile, shutil as _sh, json as _json, os as _os
     _b = __import__('build')
