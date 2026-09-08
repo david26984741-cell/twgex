@@ -43,17 +43,16 @@ jobs:
     runs-on: [self-hosted, cme]
     defaults:
       run:
-        shell: cmd
+        # /V:ON＝開延遲環境變數展開，重試迴圈裡的 !RC! 才會每一輪重新取值
+        # （用 %RC% 的話整個 for 區塊在進入前就被展開成同一個值，迴圈等於失效）
+        shell: cmd /V:ON /C call {0}
     steps:
       - uses: actions/checkout@v4
 
       - name: 弄一份可攜式 Python
         run: |
           echo === proxy：%https_proxy%
-          rem --ssl-no-revoke：紅線走公司 proxy，Windows 的 schannel 連不到憑證撤銷伺服器，
-          rem 會回 curl: (35) CRYPT_E_REVOCATION_OFFLINE 直接失敗（2026/09/04 連兩次卡在這）。
-          rem 這個旗標只跳過「撤銷檢查」，憑證鏈本身照驗。
-          if not exist pyemb.zip curl.exe -sSL --ssl-no-revoke --retry 3 --retry-all-errors -o pyemb.zip https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-embed-amd64.zip
+          if not exist pyemb.zip curl.exe -sSL --retry 2 -o pyemb.zip https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-embed-amd64.zip
           if not exist pyemb.zip ( echo 下載 Python 失敗 & exit /b 1 )
           if exist pyemb rmdir /s /q pyemb
           mkdir pyemb
@@ -69,18 +68,34 @@ jobs:
       # build.py 的訊息一律抄一份進 workflow 摘要。
       # 失敗時 Actions 的 log 介面常常展不開那一步（實測過），
       # 摘要則一定看得到，而且會留在 run 頁面上。
-      - name: 抓 CME 並建 ES 的圖
+      # 最多跑三輪。掉系列是這條線路最常見的失敗方式（公司 proxy 不穩），
+      # 而且是「這一輪的運氣」，重跑一次通常就好——2026/09/05~07 連三天失敗、
+      # 09/08 同樣的程式碼一次就過，就是這個性質。
+      # 沒有重試的話，一次網路抖動就整天沒有 ES 的圖。
+      # 成功的一輪約 30~40 分鐘，三輪的上限由 timeout-minutes 兜著。
+      - name: 抓 CME 並建 ES 的圖（最多重試三次）
+        timeout-minutes: 150
         run: |
           set PYTHONIOENCODING=utf-8
-          pyemb\python.exe -X utf8 build.py --symbol ES > build_out.txt 2>&1
-          set RC=%ERRORLEVEL%
-          echo ### build.py 的輸出（離開碼 %RC%^) >> %GITHUB_STEP_SUMMARY%
-          echo. >> %GITHUB_STEP_SUMMARY%
-          echo ``` >> %GITHUB_STEP_SUMMARY%
-          type build_out.txt >> %GITHUB_STEP_SUMMARY%
-          echo ``` >> %GITHUB_STEP_SUMMARY%
-          type build_out.txt
-          exit /b %RC%
+          set RC=1
+          for %%N in (1 2 3) do (
+            if !RC! NEQ 0 (
+              echo ===== 第 %%N 輪 =====
+              pyemb\python.exe -X utf8 build.py --symbol ES > build_out.txt 2>&1
+              set RC=!ERRORLEVEL!
+              echo ### 第 %%N 輪 build.py 的輸出（離開碼 !RC!^) >> %GITHUB_STEP_SUMMARY%
+              echo. >> %GITHUB_STEP_SUMMARY%
+              echo ``` >> %GITHUB_STEP_SUMMARY%
+              type build_out.txt >> %GITHUB_STEP_SUMMARY%
+              echo ``` >> %GITHUB_STEP_SUMMARY%
+              type build_out.txt
+              if !RC! NEQ 0 (
+                echo 這一輪沒過，等 120 秒再試。
+                ping -n 121 127.0.0.1 > nul
+              )
+            )
+          )
+          exit /b !RC!
 
       - name: 把結果交出去
         uses: actions/upload-artifact@v4
