@@ -394,8 +394,11 @@ def load_cme(args, sym):
     return day, chain, prev_oi, args.spot or meta.get("spot"), prior, extra
 
 
-# 一輪裡最多可以掉多少比例的系列還算可用
+# 一輪裡最多可以「問不到」多少比例的系列還算可用
 SERIES_LOST_MAX = 0.10
+# 「問到了但沒有結算資料」的正常值約兩成（還沒開始交易的遠月與未來週選）；
+# 超過這個比例就不是正常的空，而是 CME 還沒發布這一天的結算
+SERIES_EMPTY_MAX = 0.50
 
 
 def _cme_series_guard(args, sym, meta) -> None:
@@ -421,6 +424,20 @@ def _cme_series_guard(args, sym, meta) -> None:
         print(f"  註：{sym} 這一輪 {n} 個系列裡有 {empty} 個還沒有結算資料"
               f"（{empty/n*100:.0f}%，多半是還沒開始交易的遠月與未來週選），這是正常的。",
               file=sys.stderr)
+    # 空的太多是另一種失敗：CME 還沒發布這個交易日的結算。
+    # 這種情況下請求全部成功、跑得很快（實測乾淨的一輪約 5 分鐘），
+    # 但回來幾乎都是空的，做出來就是一張只有零星部位的圖。
+    # 2026/09/05 與 09/07 那兩輪只跑 4 分鐘、卻只有 8~15% 的部位，就是這個樣子。
+    # 正常值是兩成上下，抓到一半以上就不對了。
+    if n and empty / n > SERIES_EMPTY_MAX:
+        msg = (f"{sym}: {n} 個系列裡有 {empty} 個沒有結算資料（{empty/n*100:.0f}%），"
+               f"遠高於正常的兩成。\n"
+               f"    這通常表示 **CME 還沒發布 {meta.get('trade_day') or '這個交易日'} 的結算**，"
+               f"不是網路問題（請求都成功、只是內容是空的）。\n"
+               f"    等下一輪或晚一點再跑就會有；要強行產出請加 --allow-stale-oi。")
+        if not args.allow_stale_oi:
+            raise SystemExit("  " + msg)
+        print("  警告：" + msg, file=sys.stderr)
     if lost == 0:
         return
     share = lost / n

@@ -333,6 +333,12 @@ def chain_tests():
     # 空的很多、同時真的有幾個問不到 → 只看問不到的那幾個
     r = _try({'n_series': 87, 'n_series_lost': 5, 'n_series_empty': 21, 'lost_codes': ['EWU26']})
     check('空系列不會把問不到的比例灌大', r is None, '5/87 = 5.7%，在門檻內')
+    # 空的太多＝CME 還沒發布這一天的結算（跟「問不到」是不同的失敗）
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 70, 'trade_day': '20260907'})
+    check('空得太多會判成「CME 還沒發布」', r is not None and '還沒發布' in r and '80%' in r,
+          (r or '')[:80])
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 43})
+    check('剛好 50% 不擋', r is None, '43/87 = 49.4%')
     # 錯誤訊息要被帶出來（之後查是逾時還是被擋）
     r = _try({'n_series': 87, 'n_series_lost': 40, 'lost_codes': ['EWU26'],
               'lost_errors': ['EWU26: CME 讀取失敗 /CmeWS/...: timed out']})
