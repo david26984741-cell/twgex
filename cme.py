@@ -143,14 +143,24 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
     tried = 0
     n_merged = n_fellback = 0
     # 這一輪「該抓到」與「真的抓到」的系列數。
-    # 【2026/09/05~07 踩到的坑】底下那兩個 continue 會把抓失敗的系列無聲丟掉：
-    # _get 自己重試三次仍失敗 → 這個系列直接不見，而且沒有任何計數或訊息。
-    # 公司 proxy 一不穩就會掉掉幾十個系列，做出來的是一張「只有 8~16% 部位」的圖，
-    # 但 oi_coverage 看起來還是 0.9999（它算的是拿到的那些裡面有多少可用）。
-    # 所以一定要把「掉了幾個」記下來，交給 build.py 判斷要不要產出。
+    #
+    # 【必須分成兩種「沒拿到」，混在一起會誤判——2026/09/08 就踩到了】
+    #   1. 請求成功、但回來沒有結算資料 → **正常**。CME 的產品行事曆會把還沒開始
+    #      交易的系列先列出來（實測 87 個裡有 21 個是這種：2028 年的季月、
+    #      2026/10~12 與 2027/10 的週選），它們本來就還沒有結算價。
+    #      這個比例每天都有二成上下，不是故障。
+    #   2. 所有 pid 的請求都失敗（_get 自己重試三次仍拋出）→ **真的抓不到**。
+    #      這才是要擋的：紅線走公司 proxy，連線一不穩就會掉掉幾十個系列，
+    #      做出來是一張「只有部分部位」的圖，而 oi_coverage 看不出來
+    #      （它算的是拿到的那些裡面有多少可用，永遠 0.9999）。
+    #
+    # 判斷方式：只要有任何一個 pid 的 HTTP 請求成功回來，這個系列就算「問到了」，
+    # 沒有資料就是它真的沒有資料。全部 pid 都拋例外才算失敗。
     n_series = 0
     n_series_ok = 0
-    lost_codes = []
+    empty_codes = []          # 問到了、但沒有結算資料（正常）
+    fail_codes = []           # 問都問不到（要擋）
+    fail_errs = []            # 失敗原因，之後查是逾時還是被擋
     fb_oi = 0
     fb_codes = []
     rt_lock = ""
@@ -161,12 +171,16 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
         n_series += 1
         rows = []
         used_pid = None
+        got_reply = False                             # 有沒有任何一個 pid 真的回話
+        last_err = None
         for pid in s["pids"]:                         # 系列碼與 productId 的配對不固定，逐一試
             tried += 1
             try:
                 j = _get(f"/CmeWS/mvc/Settlements/Options/Settlements/{pid}/OOF",
                          {"monthYear": s["code"], "tradeDate": td, "strategy": "DEFAULT"})
-            except RuntimeError:
+                got_reply = True
+            except RuntimeError as e:
+                last_err = str(e)
                 continue
             r = [x for x in (j.get("settlements") or [])
                  if x.get("strike") and str(x["strike"]).lower() != "total"]
@@ -175,7 +189,12 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
                 break
             time.sleep(pause)
         if not rows:
-            lost_codes.append(s["code"])          # 抓不到＝掉了，不可以無聲跳過
+            if got_reply:
+                empty_codes.append(s["code"])     # 問到了、就是還沒有資料
+            else:
+                fail_codes.append(s["code"])      # 問不到，這才是故障
+                if last_err and len(fail_errs) < 5:
+                    fail_errs.append(f'{s["code"]}: {last_err[:160]}')
             continue
         n_series_ok += 1
         vo = fetch_volume_oi(used_pid, s["code"], trade_day, s.get("month", ""), rt_lock)
@@ -230,7 +249,9 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
             "oi_report": rt_lock, "oi_merged": n_merged, "oi_fellback": n_fellback,
             "oi_fellback_oi": fb_oi, "oi_fellback_codes": fb_codes,
             "n_series": n_series, "n_series_ok": n_series_ok,
-            "n_series_lost": len(lost_codes), "lost_codes": lost_codes[:40],
+            "n_series_empty": len(empty_codes), "empty_codes": empty_codes[:40],
+            "n_series_lost": len(fail_codes), "lost_codes": fail_codes[:40],
+            "lost_errors": fail_errs,
             "oi_total": oi_tot}
     return chain, meta
 

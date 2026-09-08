@@ -320,10 +320,23 @@ def chain_tests():
             return str(e)
     # 09/07 的真實比例：只抓到 8.6% 的部位 → 系列也掉了大半
     r = _try({'n_series': 59, 'n_series_lost': 51, 'lost_codes': ['EW1U26', 'EW2U26']})
-    check('掉太多系列會被擋下來', r is not None and '86.4%' in r, (r or '')[:70])
-    # 掉一兩個是常態（有些系列本來就沒報價），要放行
+    check('問不到的太多會被擋下來', r is not None and '86.4%' in r, (r or '')[:70])
+    # 掉一兩個是常態，要放行
     r = _try({'n_series': 59, 'n_series_lost': 4, 'lost_codes': ['EW1U26']})
-    check('只掉少數幾個照樣產出', r is None, '4/59 = 6.8%，在 10% 門檻內')
+    check('只有少數問不到照樣產出', r is None, '4/59 = 6.8%，在 10% 門檻內')
+    # 【2026/09/08 的真實反例】87 個系列裡 21 個「問到了但還沒有結算資料」
+    # （2028 季月、2026/10~12 與 2027/10 的週選，都還沒開始交易）。
+    # 第一版把這種也算成失敗，門檻 10%，結果把完全健康的一輪擋掉三次。
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 21, 'empty_codes': ['ESU28']})
+    check('「還沒開始交易」的空系列不算失敗', r is None,
+          '87 個裡 21 個是空的（24%），照樣要產出')
+    # 空的很多、同時真的有幾個問不到 → 只看問不到的那幾個
+    r = _try({'n_series': 87, 'n_series_lost': 5, 'n_series_empty': 21, 'lost_codes': ['EWU26']})
+    check('空系列不會把問不到的比例灌大', r is None, '5/87 = 5.7%，在門檻內')
+    # 錯誤訊息要被帶出來（之後查是逾時還是被擋）
+    r = _try({'n_series': 87, 'n_series_lost': 40, 'lost_codes': ['EWU26'],
+              'lost_errors': ['EWU26: CME 讀取失敗 /CmeWS/...: timed out']})
+    check('擋下來時會附上失敗原因', r is not None and 'timed out' in r, (r or '')[-60:])
     # 剛好在門檻上
     r = _try({'n_series': 100, 'n_series_lost': 10, 'lost_codes': []})
     check('剛好 10% 不擋', r is None, '門檻是「超過 10%」才擋')

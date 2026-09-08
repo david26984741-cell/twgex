@@ -387,6 +387,7 @@ def load_cme(args, sym):
              "n_requests": meta.get("n_requests"),
              "oi_asof": meta.get("oi_asof"), "oi_report": meta.get("oi_report"),
              "n_series": meta.get("n_series"), "n_series_lost": meta.get("n_series_lost"),
+             "n_series_empty": meta.get("n_series_empty"),
              "futures": (meta.get("futures") or [])[:6]}
     _cme_series_guard(args, sym, meta)
     _cme_oi_guard(args, meta)
@@ -398,33 +399,44 @@ SERIES_LOST_MAX = 0.10
 
 
 def _cme_series_guard(args, sym, meta) -> None:
-    """CME 抓取時掉了太多「系列」就當場停下，不要等到後面才發現圖是殘的。
+    """CME 抓取時「問不到」的系列太多就當場停下，不要等到後面才發現圖是殘的。
 
-    **為什麼要在這裡擋，而不是只靠 _collapse_guard。**
-    掉系列是這條線路最常見的失敗方式（2026/09/05、09/06、09/07 連三天，
-    分別只抓到 15.4%、16.5%、8.6% 的部位），成因是紅線那台走公司 proxy、
-    連線不穩，`cme._get` 自己重試三次仍失敗就把整個系列丟掉。
-    `_collapse_guard` 雖然擋得住，但它是「跟昨天比」——第一天建置、
-    或前一天剛好也是殘的，就沒有基準可比。這一關直接看「這一輪該抓幾個、
-    真的抓到幾個」，不依賴任何歷史檔，是更前面也更可靠的一道。
+    **要擋的只有「問不到」，不含「問到了但沒資料」——2026/09/08 分不清楚就誤擋了。**
+    CME 的產品行事曆會把還沒開始交易的系列先列出來（實測 87 個裡有 21 個是這種：
+    2028 年的季月、2026/10~12 與 2027/10 的週選），它們回來就是空的，每天都有
+    兩成上下，完全正常。第一版把兩者混在一起，門檻設 10%，結果把健康的一輪也擋掉。
+    分辨方式在 cme.fetch_chain：只要有任何一個 pid 的 HTTP 請求成功回話，
+    就算「問到了」；全部 pid 都拋例外才算失敗。
+
+    **為什麼還是需要這一關，而不是只靠 _collapse_guard。**
+    _collapse_guard 是「跟昨天比」——第一天建置、或前一天剛好也是殘的，
+    就沒有基準可比。這一關不依賴任何歷史檔，是更前面的一道。
     """
     n = meta.get("n_series")
     lost = meta.get("n_series_lost")
     if not n or lost is None:
         return                                   # 舊路徑（--json 餵檔）沒有這些欄位
+    empty = meta.get("n_series_empty") or 0
+    if empty:
+        print(f"  註：{sym} 這一輪 {n} 個系列裡有 {empty} 個還沒有結算資料"
+              f"（{empty/n*100:.0f}%，多半是還沒開始交易的遠月與未來週選），這是正常的。",
+              file=sys.stderr)
     if lost == 0:
         return
     share = lost / n
     codes = ", ".join(meta.get("lost_codes") or [])
-    line = (f"{sym}: 這一輪 {n} 個系列裡有 {lost} 個抓不到"
+    line = (f"{sym}: 這一輪 {n} 個系列裡有 {lost} 個**問不到**"
             f"（{share*100:.1f}%）：{codes}")
+    for e in (meta.get("lost_errors") or []):
+        line += f"\n      {e}"
     if share <= SERIES_LOST_MAX:
-        print(f"  註：{line}——占比不大，照樣產出。", file=sys.stderr)
+        print(f"  註：{line}\n    占比不大，照樣產出。", file=sys.stderr)
         return
     msg = (line + "\n"
-           + f"    掉超過 {SERIES_LOST_MAX*100:.0f}% 就不產出，因為做出來會是一張只有部分部位的圖，\n"
+           + f"    問不到的超過 {SERIES_LOST_MAX*100:.0f}% 就不產出，因為做出來會是一張只有部分部位的圖，\n"
            + "    而且 oi_coverage 看不出來（它算的是拿到的那些裡面有多少可用）。\n"
-           + "    這通常是網路不穩，重跑一次就好；要強行產出請加 --allow-stale-oi。")
+           + "    上面的錯誤訊息可以看出是逾時、被擋、還是 proxy 的問題。\n"
+           + "    要強行產出請加 --allow-stale-oi。")
     if not args.allow_stale_oi:
         raise SystemExit("  " + msg)
     print("  警告：" + msg, file=sys.stderr)
