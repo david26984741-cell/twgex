@@ -19,12 +19,22 @@ name: ES 曝險地圖（自動，跑在紅線）
 # curl 與 Python 的 urllib 都會自己讀 https_proxy。
 on:
   schedule:
-    # 兩班都抓「前一個美股期貨場次」，晚的那班是早的那班的補跑。
-    # 台北 09:00（週二~六）＝ 美東前一天 20:00 前後，CME 的量／未平倉報表剛出來不久。
-    - cron: '0 1 * * 2-6'
-    # 台北 15:15（週二~六）＝ 美東 03:15，報表一定已經發布（2026/09/01 實測，
-    # 美東 06:00 抓到的 08/31 是 oi_asof=close，完整的當日收盤未平倉）。
+    # 【紅線的外網只在台北 14:00 ~ 隔天 06:00 開放】06:00~14:00 公司封外網。
+    # 這不是可以繞的東西，排程必須整個避開那段。
+    #
+    # 實測證據（2026/09/04~08）：三次在封網時段起跑的執行（13:13、13:26、13:34）
+    # 全部在 14:04~14:05 結束——不是跑了 30~50 分鐘，是卡在那邊空轉等到 14:00
+    # 開網才在五分鐘內跑完。完全落在開放時段的執行都只要 4~5 分鐘。
+    # 舊的台北 09:00 那班（cron 0 1）永遠落在封網中，結構上不可能成功，已移除。
+    #
+    # 兩班都留大量餘裕：GitHub 排程常延遲一到三小時，
+    # 15:15 延遲四小時是 19:15、21:00 延遲四小時是隔天 01:00，都還在開放時段內，
+    # 離 06:00 封網還有好幾個小時。
+    #
+    # ── 台北 15:15（週二~週六）＝美東 03:15，CME 前一場次的結算早就發布了
     - cron: '15 7 * * 2-6'
+    # ── 台北 21:00（週二~週六）＝美東 09:00，當天的第二次機會
+    - cron: '0 13 * * 2-6'
   workflow_dispatch:
 
 permissions:
@@ -81,6 +91,18 @@ jobs:
           for %%N in (1 2 3) do (
             if !RC! NEQ 0 (
               echo ===== 第 %%N 輪 =====
+              rem 先探一下 CME 通不通。封網時段打不通，直接跳過這一輪，
+              rem 不要讓 build.py 對著封閉的網路重試 30~50 分鐘（2026/09 實際發生過三次）。
+              rem 這行不要用 ^ 換行：cmd 的 for 區塊裡接續字元很容易出事，寧可長一點
+              curl.exe -s -o nul --ssl-no-revoke -m 20 -w "CME probe HTTP %%{http_code}" https://www.cmegroup.com/CmeWS/mvc/ProductCalendar/Options/133 > probe.txt 2>&1
+              type probe.txt
+              type probe.txt >> %GITHUB_STEP_SUMMARY%
+              findstr /C:"probe HTTP 200" probe.txt > nul
+              if !ERRORLEVEL! NEQ 0 (
+                echo 外網不通（紅線在台北 06:00~14:00 封外網），這一輪跳過。
+                echo 外網不通，這一輪跳過。 >> %GITHUB_STEP_SUMMARY%
+                set RC=1
+              ) else (
               pyemb\python.exe -X utf8 build.py --symbol ES > build_out.txt 2>&1
               set RC=!ERRORLEVEL!
               echo ### 第 %%N 輪 build.py 的輸出（離開碼 !RC!^) >> %GITHUB_STEP_SUMMARY%
@@ -89,6 +111,7 @@ jobs:
               type build_out.txt >> %GITHUB_STEP_SUMMARY%
               echo ``` >> %GITHUB_STEP_SUMMARY%
               type build_out.txt
+              )
               if !RC! NEQ 0 (
                 echo 這一輪沒過，等 120 秒再試。
                 ping -n 121 127.0.0.1 > nul
