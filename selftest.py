@@ -358,6 +358,176 @@ def chain_tests():
     r = _try({'n_series': 59, 'n_series_lost': 51, 'lost_codes': []}, _S2())
     check('加了 --allow-stale-oi 可以強行放行（掉系列）', r is None)
 
+    # --- CME 邊緣節點限流：回 HTTP 200 但 settlements 是空的 -------------
+    # 【2026/09/09~10 的真實反例】同一個 trade_day、同一份程式碼連跑六輪，
+    # 「沒有結算資料」的系列數是 50 → 55 → 62 → 76 → 55 → 80，行事曆本身
+    # 也在 87 ↔ 82 之間跳。輸入一樣、結果每次不同，就不可能是「還沒發布」。
+    import cme as _cme
+
+    def _calendar(codes, pids=(9, 11)):
+        return [{"optionType": "EUR", "name": "Weekly Friday",
+                 "productIds": list(pids),
+                 "calendarEntries": [{"productCode": c, "lastTrade": "18 Dec 2026",
+                                      "contractMonth": "DEC 26"} for c in codes]}]
+
+    def _settle_rows():
+        return {"settlements": [{"strike": "7700", "type": "Call", "settle": "50.0",
+                                 "openInterest": "1000", "volume": "10", "last": "50.0"},
+                                {"strike": "7700", "type": "Put", "settle": "40.0",
+                                 "openInterest": "900", "volume": "8", "last": "40.0"}]}
+
+    class _Stub:
+        """假的 CME。可以指定行事曆每次回幾筆、哪些系列這一遍回空的。"""
+        def __init__(self, cals, empty_passes, good_pid=11):
+            self.cals = list(cals)          # 每次要行事曆回哪一份
+            self.empty_passes = empty_passes  # code -> 前幾遍要回空的
+            self.good_pid = good_pid
+            self.n_cal = 0
+            self.n_oof = 0
+            self.seen = {}                  # code -> 已經被問過幾遍
+        def get(self, path, params=None, **kw):
+            if "ProductCalendar" in path:
+                c = self.cals[min(self.n_cal, len(self.cals) - 1)]
+                self.n_cal += 1
+                return c
+            if "/FUT" in path:
+                return {"settlements": [{"month": "DEC 26", "settle": "7700.0",
+                                         "openInterest": "1000000"}]}
+            if "/OOF" in path:
+                self.n_oof += 1
+                pid = int(path.split("/")[-2])
+                code = (params or {}).get("monthYear")
+                if pid != self.good_pid:
+                    return {"settlements": []}      # 錯的 pid：回空
+                n = self.seen.get(code, 0)
+                self.seen[code] = n + 1
+                if n < self.empty_passes.get(code, 0):
+                    return {"settlements": []}      # 被限流：HTTP 200 但內容是空的
+                return _settle_rows()
+            return {}
+
+    def _with_stub(stub, fn):
+        og, ov = _cme._get, _cme.fetch_volume_oi
+        _cme._get = stub.get
+        _cme.fetch_volume_oi = lambda pid, code, td, wm="", rt="": (
+            {("C", 7700.0): (1234, 0), ("P", 7700.0): (1111, 0)}, "F")
+        try:
+            return fn()
+        finally:
+            _cme._get, _cme.fetch_volume_oi = og, ov
+
+    # 行事曆殘缺時取聯集，不能只信一次的結果
+    st = _Stub([_calendar(["A26", "B26"]), _calendar(["A26", "B26", "C26", "D26"])], {})
+    ser = _with_stub(st, lambda: _cme.list_series("ES"))
+    check("行事曆問兩次取聯集，殘的那份不會決定分母",
+          len(ser) == 4, f"第一次 2 筆、第二次 4 筆 → 聯集 {len(ser)} 筆")
+
+    # 同一個 type 底下的系列共用 pid，記住上一個成功的那個就不用每次試錯
+    codes = [f"E{i}26" for i in range(10)]
+    st = _Stub([_calendar(codes)], {})
+    ch, mt = _with_stub(st, lambda: _cme.fetch_chain(
+        "20260910", "ES", pause=0, retry_waits=()))
+    check("記住上一次成功的 pid，不用每個系列都從頭試錯",
+          st.n_oof == 11, f"10 個系列只打了 {st.n_oof} 個結算請求（不記的話是 20）")
+
+    # 限流：昨天有的系列今天空手 → 補抓要把它撈回來
+    st = _Stub([_calendar(codes)], {"E026": 1, "E526": 1, "E726": 2})
+    ch, mt = _with_stub(st, lambda: _cme.fetch_chain(
+        "20260910", "ES", pause=0, known_live=set(codes), retry_waits=(0, 0, 0)))
+    check("被限流回空的系列會被補抓回來",
+          mt["n_recovered"] == 3 and mt["n_known_missing"] == 0,
+          f"補回 {mt['n_recovered']} 個、還缺 {mt['n_known_missing']} 個")
+    check("補抓回來的系列真的有進到鏈裡", len(ch) == 10, f"{len(ch)} 個到期別")
+
+    # 昨天沒有的系列（還沒開始交易的遠月）永遠是空的，不該去補抓它
+    st = _Stub([_calendar(codes)], {c: 99 for c in codes[6:]})
+    ch, mt = _with_stub(st, lambda: _cme.fetch_chain(
+        "20260910", "ES", pause=0, known_live=set(codes[:6]), retry_waits=(0, 0, 0)))
+    check("『還沒開始交易』的空系列不會被反覆補抓",
+          mt["n_known_missing"] == 0 and mt["n_series_empty"] == 4 and mt["n_recovered"] == 0,
+          f"空 {mt['n_series_empty']} 個、基準缺 {mt['n_known_missing']} 個")
+
+    # 昨天有的幾乎全滅＝這一場次還沒發布，補抓只是白打請求，不做
+    st = _Stub([_calendar(codes)], {c: 99 for c in codes})
+    base = None
+    ch, mt = _with_stub(st, lambda: _cme.fetch_chain(
+        "20260910", "ES", pause=0, known_live=set(codes), retry_waits=(0, 0, 0)))
+    check("昨天有的全滅時不補抓（那是還沒發布，重打只會養深限流）",
+          st.n_oof == 20 and mt["n_recovered"] == 0 and mt["n_known_missing"] == 10,
+          f"只打了 {st.n_oof} 個請求（補抓的話會多打幾十個）")
+
+    # --- 有前一天可比時，門檻改看「昨天有、今天沒有」---------------------
+    # 昨天有 60 個、今天缺 20 個 → 擋，而且要說是限流不是還沒發布
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 41,
+              'n_known_live': 60, 'n_known_missing': 20,
+              'known_missing_codes': ['EW1U26'], 'trade_day': '20260909'})
+    check('昨天有、今天缺了三分之一會被擋下來',
+          r is not None and '限流' in r and '33%' in r, (r or '')[:80])
+    check('缺一部分時不會誤報成「還沒發布」', r is not None and '還沒發布' not in r)
+    # 昨天有的全滅 → 訊息要改口說是還沒發布
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 87,
+              'n_known_live': 60, 'n_known_missing': 60, 'trade_day': '20260909'})
+    check('昨天有的全滅時判成「CME 還沒發布」',
+          r is not None and '還沒發布' in r, (r or '')[:80])
+    # 【這是這次改動的重點】空的很多、但昨天有的一個都沒缺 → 照樣產出。
+    # 舊的 empty/n > 50% 那一條會把這種健康的一輪擋掉。
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 70,
+              'n_known_live': 60, 'n_known_missing': 0, 'trade_day': '20260909'})
+    check('空的再多，只要昨天有的都在就照樣產出', r is None,
+          '70/87 是空的，但那 70 個昨天本來就沒有')
+    # 缺一兩個是常態
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 24,
+              'n_known_live': 60, 'n_known_missing': 3, 'trade_day': '20260909'})
+    check('昨天有的缺個位數照樣產出', r is None, '3/60 = 5%，剛好在門檻上')
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 25,
+              'n_known_live': 60, 'n_known_missing': 4, 'trade_day': '20260909'})
+    check('超過 5% 就擋', r is not None)
+    # 沒有基準時（第一次建置）退回舊的粗篩
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 70,
+              'n_known_live': 0, 'trade_day': '20260909'})
+    check('沒有前一天可比時，退回舊的 empty/n 粗篩', r is not None and '還沒發布' in r)
+    # 強制放行
+    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 41,
+              'n_known_live': 60, 'n_known_missing': 20}, _S2())
+    check('加了 --allow-stale-oi 可以強行放行（基準缺件）', r is None)
+
+    # --- 「昨天有哪些系列」這個基準怎麼撈出來的 -------------------------
+    import tempfile as _tf, json as _js, os as _os2, shutil as _sh
+    _tmp = _tf.mkdtemp()
+    _os2.makedirs(_os2.path.join(_tmp, "ES", "history"))
+    _old_data = _bb.DATA
+    def _write(name, trade_date, exps):
+        p = (_os2.path.join(_tmp, "ES", "history", name + ".json") if name
+             else _os2.path.join(_tmp, "ES", "latest.json"))
+        with open(p, "w", encoding="utf-8") as fh:
+            _js.dump({"meta": {"trade_date": trade_date},
+                      "expiries": [{"code": c, "ltd": l} for c, l in exps]}, fh)
+    try:
+        _bb.DATA = _tmp
+        _write("20260909", "2026/09/09",
+               [("EW1U26", "2026-09-11"), ("E2AU26", "2026-09-10"),
+                ("OLDU26", "2026-09-09"), ("ESZ26", "2026-12-18")])
+        kl = _bb._cme_known_live("ES", "20260910")
+        check("基準只留下今天之後才到期的系列",
+              kl == {"EW1U26", "ESZ26"},
+              f"{sorted(kl)}（09-10 當天到期的 E2AU26 與 09-09 就到期的 OLDU26 要被濾掉）")
+        # 只有 latest.json、沒有 history 也要能當基準
+        _os2.remove(_os2.path.join(_tmp, "ES", "history", "20260909.json"))
+        _write(None, "2026/09/09", [("EW1U26", "2026-09-11")])
+        check("沒有 history 時退回 latest.json",
+              _bb._cme_known_live("ES", "20260910") == {"EW1U26"})
+        # 檔裡就是今天（重跑同一天）→ 不能拿自己當基準
+        _write(None, "2026/09/10", [("EW1U26", "2026-09-11")])
+        check("重跑同一天時不拿自己當基準",
+              _bb._cme_known_live("ES", "20260910") == set(),
+              "拿自己比的話永遠不缺，這一關就等於沒有")
+        # 沒有任何檔 → 空集合，退回舊的粗篩，不可以炸掉
+        _bb.DATA = _os2.path.join(_tmp, "nope")
+        check("第一次建置沒有檔時回空集合", _bb._cme_known_live("ES", "20260910") == set())
+    finally:
+        _bb.DATA = _old_data
+        _sh.rmtree(_tmp, ignore_errors=True)
+
     # --- 整批塌掉的守門（ES 2026/09/03 真的發生過）---
     import tempfile, shutil as _sh, json as _json, os as _os
     _b = __import__('build')
