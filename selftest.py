@@ -528,6 +528,74 @@ def chain_tests():
         _bb.DATA = _old_data
         _sh.rmtree(_tmp, ignore_errors=True)
 
+    # --- 看門狗：兩個訊號各自擋得住什麼 ---------------------------------
+    import importlib.util as _ilu, datetime as _dt2, os as _os
+    import tempfile as _tf, os as _os2, shutil as _sh
+    _spec = _ilu.spec_from_file_location(
+        "watchdog", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                  "tools", "watchdog.py"))
+    _wd = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_wd)
+    D = _dt2.date
+    HOL_US = {D(2026, 9, 7)}          # 2026 勞動節（星期一）
+
+    check("落後天數會跳過週末",
+          _wd.trading_days_since(D(2026, 9, 4), D(2026, 9, 7), set()) == 1,
+          "09/04(五) → 09/07(一)：只有 09/07 一天")
+    check("落後天數會跳過休市日",
+          _wd.trading_days_since(D(2026, 9, 4), D(2026, 9, 8), HOL_US) == 1,
+          "09/07 是勞動節，只算 09/08")
+    check("資料日就是今天時落後 0",
+          _wd.trading_days_since(D(2026, 9, 9), D(2026, 9, 9), set()) == 0)
+
+    # 【2026/09/10 早上 08:00 的真實數字——這一組就是「為什麼要兩個訊號」】
+    # ES 已經兩個交易日沒更新（停在 09/04，該有 09/09），但因為 09/07 是勞動節，
+    # 「落後」只算出 2，剛好卡在門檻上不會叫。那天早上單看資料日是安靜的。
+    lag = _wd.trading_days_since(D(2026, 9, 4), D(2026, 9, 9), HOL_US)
+    check("【真實反例】ES 停兩天，但撞到勞動節就剛好卡在門檻上不會叫",
+          lag == 2 and lag <= _wd.LAG_MAX_DEFAULT,
+          f"落後 {lag}、門檻 {_wd.LAG_MAX_DEFAULT} → 資料日這個訊號叫不出來")
+    # 同一個時點，排程那個訊號當場就叫（#23、#24 連續失敗）
+    ok, desc = _wd.judge_runs([(24, "failure"), (23, "failure")])
+    check("【真實反例】同一個時點，連續兩次排程失敗會叫",
+          ok is False and "連續失敗" in desc, desc)
+
+    ok, _ = _wd.judge_runs([(25, "success"), (24, "failure")])
+    check("失敗一次之後自己救回來就不叫", ok is True, "最近一次成功＝它恢復了")
+    ok, _ = _wd.judge_runs([(24, "failure"), (23, "success")])
+    check("只有最近一次失敗不叫（單次抖動）", ok is True)
+    ok, _ = _wd.judge_runs([(24, "timed_out"), (23, "failure")])
+    check("逾時也算失敗", ok is False)
+    ok, d2 = _wd.judge_runs([(24, "failure")])
+    check("紀錄不足兩次時不判斷（新 repo / 剛改完 workflow）", ok is True, d2)
+    ok, _ = _wd.judge_runs([])
+    check("完全沒有排程紀錄時不判斷", ok is True)
+
+    # 門檻要跟網站上那則紅字提醒一致，不然兩邊會各講各話
+    check("看門狗的門檻跟 app.js 的 staleNotice 一致",
+          _wd.LAG_MAX.get("TXO") == 1 and _wd.LAG_MAX_DEFAULT == 2,
+          "台指 >1、美股四檔 >2")
+    check("五個標的都在看門狗的名單裡",
+          {s[0] for s in _wd.SYMBOLS} == {"TXO", "SPX", "ES", "SPY", "QQQ"})
+    check("台指看台北、美股看美東",
+          dict((s[0], s[2]) for s in _wd.SYMBOLS)["TXO"] == 8
+          and dict((s[0], s[2]) for s in _wd.SYMBOLS)["ES"] == -5)
+
+    # 資料檔壞掉 / 不見時要當成失敗，不可以安靜略過
+    _t2 = _tf.mkdtemp()
+    try:
+        _os2.makedirs(_os2.path.join(_t2, "data", "TXO"))
+        open(_os2.path.join(_t2, "calendar_tw.txt"), "w").write("")
+        open(_os2.path.join(_t2, "calendar_us.txt"), "w").write("")
+        r = dict((x[0], x) for x in _wd.check_data(_t2))
+        check("latest.json 不見時判成失敗", r["ES"][4] is False, r["ES"][5])
+        with open(_os2.path.join(_t2, "data", "TXO", "latest.json"), "w") as fh:
+            fh.write("{ 壞掉的 json")
+        r = dict((x[0], x) for x in _wd.check_data(_t2))
+        check("latest.json 壞掉時判成失敗，不是當作沒事",
+              r["TXO"][4] is False, r["TXO"][5][:40])
+    finally:
+        _sh.rmtree(_t2, ignore_errors=True)
+
     # --- 整批塌掉的守門（ES 2026/09/03 真的發生過）---
     import tempfile, shutil as _sh, json as _json, os as _os
     _b = __import__('build')
