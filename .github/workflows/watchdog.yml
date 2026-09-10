@@ -1,0 +1,36 @@
+name: 資料有沒有跟上（看門狗）
+
+# ── 這支跟另外兩支最大的差別：它跑在 GitHub 自己的機器上，不是紅線那台 ──────
+# 紅線那台的外網只在台北 14:00 ~ 隔天 06:00 開放，所以 es-auto.yml 的排程必須
+# 整個避開早上。**這支不受那個限制**：runs-on 是 ubuntu-latest（GitHub 的機器），
+# 而且它只讀兩樣東西——checkout 下來的 data/*/latest.json，以及本 repo 的
+# Actions API。不連 CME、不連期交所、不連 CBOE、不需要瀏覽器、不碰紅線。
+# 所以排在台北早上 08:00 是安全的，那個時間點反而最好：
+#   ・台指前一天 15:15 那班、美股四檔前一天 12:30 那班都早就跑完了
+#   ・ES 前一天 21:00 那班（GitHub 常延遲三四小時 → 最晚約 01:00）也結束了
+#   ・出事的話你上班第一件事就會看到信，不用等到自己想起來去看網站
+on:
+  schedule:
+    - cron: '0 0 * * 1-5'        # ＝ 台北 08:00（週一~週五）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read                  # 要讀 Actions API 問最近的執行結果
+
+# 故意不跟 gexmap-daily 共用 concurrency 群組：這支只讀不寫，
+# 沒必要排在更新那兩支後面等，卡住反而會延後通知。
+
+jobs:
+  check:
+    name: 對日期與最近的執行結果
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 失敗時 GitHub 預設會寄信給 repo 擁有者，所以這裡不用另外接通知。
+      # 判斷邏輯與「為什麼需要兩個訊號」寫在 tools/watchdog.py 的檔頭。
+      - name: 檢查
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/watchdog.py
