@@ -88,18 +88,40 @@ def _int(v) -> int:
         return 0
 
 
-def list_series(sym: str = "ES") -> List[dict]:
-    """列出所有選擇權系列（月選 / EOM / 週一~週五週選）。"""
-    cal = _get(f"/CmeWS/mvc/ProductCalendar/Options/{FUT_PRODUCT[sym]}")
-    out = []
-    for ty in cal:
-        pids = ty.get("productIds") or ([ty["productId"]] if ty.get("productId") else [])
-        for e in ty.get("calendarEntries", []):
-            out.append({"code": e["productCode"], "last_trade": e["lastTrade"],
-                        "option_type": ty.get("optionType"), "name": ty.get("name"),
-                        "month": e.get("contractMonth", ""),
-                        "american": ty.get("optionType") == "AME", "pids": list(pids)})
-    return out
+def list_series(sym: str = "ES", attempts: int = 2) -> List[dict]:
+    """列出所有選擇權系列（月選 / EOM / 週一~週五週選）。
+
+    **要多問幾次取聯集，不能只問一次。**（2026/09/09~10 實測）
+    CME 的邊緣節點限流時不是回錯誤碼，是回 HTTP 200 ＋ 內容殘缺。同一支行事曆
+    在四分鐘之內回過 87 筆、也回過 82 筆。行事曆在一次執行裡不可能真的變動，
+    少的那份就是殘的。取聯集只多花一個請求，卻讓「今天有幾個系列」這個分母
+    穩定下來——後面所有比例都是拿它當基準。
+    """
+    out: Dict[Tuple[str, str], dict] = {}
+    errs: List[str] = []
+    for i in range(max(1, attempts)):
+        if i:
+            time.sleep(2.0)
+        try:
+            cal = _get(f"/CmeWS/mvc/ProductCalendar/Options/{FUT_PRODUCT[sym]}")
+        except RuntimeError as e:
+            errs.append(str(e))
+            continue
+        for ty in cal:
+            pids = ty.get("productIds") or ([ty["productId"]] if ty.get("productId") else [])
+            for e in ty.get("calendarEntries", []):
+                key = (e["productCode"], ty.get("name") or "")
+                rec = out.setdefault(key, {
+                    "code": e["productCode"], "last_trade": e["lastTrade"],
+                    "option_type": ty.get("optionType"), "name": ty.get("name"),
+                    "month": e.get("contractMonth", ""),
+                    "american": ty.get("optionType") == "AME", "pids": []})
+                for p in pids:
+                    if p not in rec["pids"]:
+                        rec["pids"].append(p)
+    if not out:
+        raise RuntimeError("CME 商品行事曆一次都沒問到：" + "；".join(errs[:2]))
+    return list(out.values())
 
 
 def _parse_last_trade(s: str) -> Optional[dt.date]:
@@ -122,13 +144,25 @@ def kind_of(name: str, american: bool) -> str:
     return "月選・美式" if american else "月選"
 
 
-def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=None
+# 補抓時每一輪之間等多久（秒）。限流退得慢，等太短沒有意義。
+EMPTY_RETRY_WAITS = (20, 60, 150)
+# 「昨天有、今天空手」的比例超過這個就不補抓：這種規模不是限流的樣子，
+# 是這一場次的結算根本還沒發布。補抓只會白打幾百個請求，把限流養得更深。
+EMPTY_RETRY_MAX_SHARE = 0.80
+
+
+def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=None,
+                known_live=None, retry_waits: Tuple[int, ...] = EMPTY_RETRY_WAITS
                 ) -> Tuple[Dict[str, dict], dict]:
     """trade_day: YYYYMMDD。回傳 (chain, meta)，chain 的結構與 taifex / cboe 一致。
 
     prev_td: 取前一個交易日的函式。季月選（optionType = AME）是在第三個星期五
     「開盤」以特別報價結算的，最後交易日實際上結束在那天早上，所以把 ltd 往前挪
     一個交易日，跟 SPX 的 AM 結算用同一套處理。
+
+    known_live: 上一個交易日那份圖裡、到今天還沒到期的系列代碼（build.py 給）。
+    這些系列今天不可能真的沒有結算資料，第一遍空手而回的會被補抓，見下面的說明。
+    沒有給就退回舊行為，只跑一遍。
     """
     def _prev(d):
         if prev_td:
@@ -137,43 +171,53 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
         while x.weekday() >= 5:
             x -= dt.timedelta(days=1)
         return x
+
     td = f"{trade_day[4:6]}/{trade_day[6:8]}/{trade_day[:4]}"
     chain: Dict[str, dict] = {}
     n_all = n_used = 0
     tried = 0
     n_merged = n_fellback = 0
-    # 這一輪「該抓到」與「真的抓到」的系列數。
-    #
-    # 【必須分成兩種「沒拿到」，混在一起會誤判——2026/09/08 就踩到了】
-    #   1. 請求成功、但回來沒有結算資料 → **正常**。CME 的產品行事曆會把還沒開始
-    #      交易的系列先列出來（實測 87 個裡有 21 個是這種：2028 年的季月、
-    #      2026/10~12 與 2027/10 的週選），它們本來就還沒有結算價。
-    #      這個比例每天都有二成上下，不是故障。
-    #   2. 所有 pid 的請求都失敗（_get 自己重試三次仍拋出）→ **真的抓不到**。
-    #      這才是要擋的：紅線走公司 proxy，連線一不穩就會掉掉幾十個系列，
-    #      做出來是一張「只有部分部位」的圖，而 oi_coverage 看不出來
-    #      （它算的是拿到的那些裡面有多少可用，永遠 0.9999）。
-    #
-    # 判斷方式：只要有任何一個 pid 的 HTTP 請求成功回來，這個系列就算「問到了」，
-    # 沒有資料就是它真的沒有資料。全部 pid 都拋例外才算失敗。
-    n_series = 0
-    n_series_ok = 0
-    empty_codes = []          # 問到了、但沒有結算資料（正常）
-    fail_codes = []           # 問都問不到（要擋）
-    fail_errs = []            # 失敗原因，之後查是逾時還是被擋
     fb_oi = 0
-    fb_codes = []
+    fb_codes: List[str] = []
     rt_lock = ""
+    good_pid: Dict[str, int] = {}
+
+    # 這一輪「該抓到」的系列。
+    #
+    # 【必須分成三種「沒拿到」，混在一起會誤判——2026/09/08 與 09/09 各踩過一次】
+    #   1. 請求成功、回來沒有結算資料，而且**昨天也沒有** → 正常。CME 的產品行事曆
+    #      會把還沒開始交易的系列先列出來（實測 87 個裡有 21 個是這種：2028 年的
+    #      季月、2026/10~12 與 2027/10 的週選），每天都有兩成上下。
+    #   2. 請求成功、回來沒有結算資料，但**昨天有** → 這是故障，而且看不出來。
+    #      見下面「補抓」段落。
+    #   3. 所有 pid 的請求都失敗（_get 自己重試三次仍拋出）→ 真的問不到。
+    series = []
     for s in list_series(sym):
         ltd = _parse_last_trade(s["last_trade"])
         if ltd is None or ltd.strftime("%Y%m%d") <= trade_day:
             continue                                  # 已到期 / 當日到期一律排除
-        n_series += 1
-        rows = []
+        series.append(dict(s, ltd=ltd))
+    n_series = len(series)
+
+    def _rows_of(s):
+        """要一個系列的結算表，回傳 (結算列, 用到的 pid, 有沒有回話, 最後的錯誤)。
+
+        **同一個 option type 底下的系列共用同一組 productIds**，所以上一個系列
+        問成功的那個 pid，下一個多半也是它。把它排到最前面就不用每個系列都從頭
+        試錯：2026/09/04 那一輪打了 301 個請求，可用系列只有 66 個，多出來的
+        大半是試錯。請求打得越少，越不容易踩到 CME 的限流。
+        """
+        nonlocal tried
+        rows: list = []
         used_pid = None
-        got_reply = False                             # 有沒有任何一個 pid 真的回話
+        got_reply = False
         last_err = None
-        for pid in s["pids"]:                         # 系列碼與 productId 的配對不固定，逐一試
+        pids = list(s["pids"])
+        g = good_pid.get(s.get("name") or "")
+        if g is not None and g in pids:
+            pids.remove(g)
+            pids.insert(0, g)
+        for pid in pids:
             tried += 1
             try:
                 j = _get(f"/CmeWS/mvc/Settlements/Options/Settlements/{pid}/OOF",
@@ -186,17 +230,14 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
                  if x.get("strike") and str(x["strike"]).lower() != "total"]
             if r:
                 rows, used_pid = r, pid
+                good_pid[s.get("name") or ""] = pid
                 break
             time.sleep(pause)
-        if not rows:
-            if got_reply:
-                empty_codes.append(s["code"])     # 問到了、就是還沒有資料
-            else:
-                fail_codes.append(s["code"])      # 問不到，這才是故障
-                if last_err and len(fail_errs) < 5:
-                    fail_errs.append(f'{s["code"]}: {last_err[:160]}')
-            continue
-        n_series_ok += 1
+        return rows, used_pid, got_reply, last_err
+
+    def _absorb(s, rows, used_pid) -> None:
+        """把一個系列的結算列＋當日收盤未平倉併進 chain。"""
+        nonlocal n_all, n_used, n_merged, n_fellback, fb_oi, rt_lock, tried
         vo = fetch_volume_oi(used_pid, s["code"], trade_day, s.get("month", ""), rt_lock)
         tried += 1
         if vo:
@@ -206,6 +247,7 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
             vmap = None
             n_fellback += 1
             fb_codes.append(s["code"])
+        ltd = s["ltd"]
         blk = chain.setdefault(s["code"], {
             "ltd": _prev(ltd) if s["american"] else ltd,
             "kind": kind_of(s["name"], s["american"]),
@@ -213,10 +255,10 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
         for x in rows:
             n_all += 1
             oi = _int(x.get("openInterest"))
-            K0 = _num(x.get("strike"))
-            cp0 = "C" if str(x.get("type", "")).upper().startswith("C") else "P"
-            if vmap is not None and K0 is not None:
-                oi = vmap.get((cp0, K0), (oi, 0))[0]   # 併入當日收盤未平倉
+            K = _num(x.get("strike"))
+            cp = "C" if str(x.get("type", "")).upper().startswith("C") else "P"
+            if vmap is not None and K is not None:
+                oi = vmap.get((cp, K), (oi, 0))[0]     # 併入當日收盤未平倉
             elif vmap is None and oi > 0:
                 fb_oi += oi                            # 這一檔用的是前一日未平倉
             if oi <= 0:
@@ -224,15 +266,77 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
             px = _num(x.get("settle"))
             if px is None or px <= 0:
                 continue
-            K = _num(x.get("strike"))
-            cp = "C" if str(x.get("type", "")).upper().startswith("C") else "P"
             if K is None:
                 continue
             blk["strikes"].setdefault(K, {})[cp] = {
                 "settle": px, "close": _num(x.get("last")),
                 "oi": oi, "vol": _int(x.get("volume"))}
             n_used += 1
+
+    # ── 第一遍 ──────────────────────────────────────────────────────────────
+    empty_codes: List[str] = []       # 問到了、但沒有結算資料
+    fail_codes: List[str] = []        # 問都問不到
+    fail_errs: List[str] = []         # 失敗原因，之後查是逾時還是被擋
+    pending: Dict[str, dict] = {}     # 第一遍沒拿到的系列
+    for s in series:
+        rows, used_pid, got_reply, last_err = _rows_of(s)
+        if not rows:
+            pending[s["code"]] = s
+            if got_reply:
+                empty_codes.append(s["code"])
+            else:
+                fail_codes.append(s["code"])
+                if last_err and len(fail_errs) < 5:
+                    fail_errs.append(f'{s["code"]}: {last_err[:160]}')
+            continue
+        _absorb(s, rows, used_pid)
         time.sleep(pause)
+
+    # ── 補抓：昨天有資料、今天卻空手而回的系列 ──────────────────────────────
+    # 【2026/09/09~10 的真實反例】同一個 trade_day、同一份程式碼，在紅線那台連跑
+    # 六輪（兩次排程 × 三輪），「沒有結算資料」的系列數是
+    #     50 → 55 → 62 → 76 → 55 → 80
+    # 行事曆本身也在 87 與 82 之間跳。輸入一模一樣、結果每次都不同，就**不可能**
+    # 是「CME 還沒發布」——發布是整場次一起發的，不會這一分鐘有、下一分鐘沒有。
+    #
+    # 這是 CME 的邊緣節點在限流：**不回錯誤碼，回 HTTP 200 ＋ 空的 settlements**，
+    # 跟「這個系列還沒開始交易」在回應上長得一模一樣，靠單次回應分不出來。
+    # 唯一分得出來的辦法是拿昨天那份檔當基準：昨天有部位、今天還沒到期的系列，
+    # 今天不可能真的沒有結算。所以只補抓這些，其他的空就是真的空。
+    #
+    # 補抓要隔得夠開（20 / 60 / 150 秒）。限流退得慢，連續重打只會把它養得更深；
+    # 舊版 workflow 那種「整批重跑、只隔 120 秒」正是把自己鎖死的原因。
+    known = set(known_live or ())
+    n_known_live = 0
+    n_recovered = 0
+    known_missing: List[str] = []
+    if known:
+        known &= {s["code"] for s in series}
+        n_known_live = len(known)
+        todo = [pending[c] for c in list(pending) if c in known]
+        share = (len(todo) / n_known_live) if n_known_live else 0.0
+        if todo and share <= EMPTY_RETRY_MAX_SHARE:
+            for wait in retry_waits:
+                if not todo:
+                    break
+                time.sleep(wait)
+                still = []
+                for s in todo:
+                    rows, used_pid, got_reply, last_err = _rows_of(s)
+                    if rows:
+                        _absorb(s, rows, used_pid)
+                        n_recovered += 1
+                        code = s["code"]
+                        if code in empty_codes:
+                            empty_codes.remove(code)
+                        if code in fail_codes:
+                            fail_codes.remove(code)
+                        pending.pop(code, None)
+                    else:
+                        still.append(s)
+                    time.sleep(pause)
+                todo = still
+        known_missing = sorted(c for c in pending if c in known)
 
     chain = {k: v for k, v in chain.items() if v["strikes"]}
     fut = fetch_futures(trade_day, sym)
@@ -248,10 +352,12 @@ def fetch_chain(trade_day: str, sym: str = "ES", pause: float = 0.15, prev_td=No
             "oi_asof": "close" if n_merged else "prev",
             "oi_report": rt_lock, "oi_merged": n_merged, "oi_fellback": n_fellback,
             "oi_fellback_oi": fb_oi, "oi_fellback_codes": fb_codes,
-            "n_series": n_series, "n_series_ok": n_series_ok,
+            "n_series": n_series, "n_series_ok": len(chain),
             "n_series_empty": len(empty_codes), "empty_codes": empty_codes[:40],
             "n_series_lost": len(fail_codes), "lost_codes": fail_codes[:40],
             "lost_errors": fail_errs,
+            "n_known_live": n_known_live, "n_known_missing": len(known_missing),
+            "known_missing_codes": known_missing[:40], "n_recovered": n_recovered,
             "oi_total": oi_tot}
     return chain, meta
 
