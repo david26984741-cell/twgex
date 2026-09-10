@@ -310,8 +310,15 @@ async function staleNotice(meta) {
   const ok = tw ? 1 : 2;
   if (n <= ok) { box.style.display = 'none'; return; }
   const late = n - ok;
+  // ES 這一段以前寫「要自己用 tools/cme.html 抓」，那是還沒自動化之前的說法，
+  // 現在 es-auto.yml 跑在紅線那台上，會誤導人去做一件不必要的事，所以改掉。
   const how = meta.symbol === 'ES'
-    ? 'ES 要在自己的電腦上用 <code>tools/cme.html</code> 抓（CME 擋伺服器端的 IP），最可能是那班沒跑。'
+    ? 'ES 跑在紅線那台上（CME 擋伺服器端的 IP）。到 GitHub 的 Actions 開 '
+      + '<code>es-auto.yml</code> 看最近一次執行：<br>'
+      + '・失敗且訊息說「限流」→ 隔半小時以上再按一次 Run workflow，連續重試只會更糟。<br>'
+      + '・失敗且訊息說「還沒發布」→ 等 CME 發布，晚幾小時再跑。<br>'
+      + '・整個沒有執行紀錄 → 紅線那台的 runner 掉線了。<br>'
+      + '手動補跑要挑在<b>台北 14:00 ~ 隔天 06:00</b>，那台在 06:00~14:00 是封外網的。'
     : tw ? '可能是期交所檔案延後上架，或排程沒跑——到 GitHub 的 Actions 手動按一次 Run workflow 就會補。'
          : '可能是排程沒跑或 CBOE 那邊還沒更新——到 GitHub 的 Actions 手動按一次 Run workflow 就會補。';
   box.style.display = '';
