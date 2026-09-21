@@ -50,7 +50,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: gexmap-daily          # 跟每日更新同一組，不會同時寫 data/
+  # 【2026/09/21 從 gexmap-daily 拆出來】原本跟 daily.yml 共用一組，想法是
+  # 「不要同時寫 data/」。但那個防護沒必要、代價又很實際：
+  # 09/18 紅線的 runner 掉線之後，ES 的 job 在隊列裡躺了 24 小時，
+  # **daily.yml 的 #72、#73 兩班排程被卡在後面，跟著一起被取消**——
+  # 一台自架機器沒開機，把跑在 GitHub 上、根本不需要那台機器的那條線也拖垮了。
+  # 兩支寫的是不同子目錄（data/ES/ vs data/TXO|SPX|SPY|QQQ/），
+  # 提交那步又都是 push 失敗就 fetch + rebase 重試三次，同時跑不會打架。
+  group: gexmap-es
   cancel-in-progress: false
 
 env:
