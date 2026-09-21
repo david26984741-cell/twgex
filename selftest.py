@@ -551,13 +551,15 @@ def chain_tests():
     # ES 已經兩個交易日沒更新（停在 09/04，該有 09/09），但因為 09/07 是勞動節，
     # 「落後」只算出 2，剛好卡在門檻上不會叫。那天早上單看資料日是安靜的。
     lag = _wd.trading_days_since(D(2026, 9, 4), D(2026, 9, 9), HOL_US)
-    check("【真實反例】ES 停兩天，但撞到勞動節就剛好卡在門檻上不會叫",
-          lag == 2 and lag <= _wd.LAG_MAX_DEFAULT,
-          f"落後 {lag}、門檻 {_wd.LAG_MAX_DEFAULT} → 資料日這個訊號叫不出來")
-    # 同一個時點，排程那個訊號當場就叫（#23、#24 連續失敗）
+    check("【真實反例】勞動節會把「停兩天」壓成落後 2（舊門檻 2 剛好放過）",
+          lag == 2, f"09/07 是勞動節不算，所以只有 09/08、09/09")
+    check("收緊到 >1 之後，09/10 這個時點也叫得出來",
+          lag > _wd.LAG_MAX_DEFAULT,
+          f"落後 {lag} > 門檻 {_wd.LAG_MAX_DEFAULT}；舊門檻 2 時它是安靜的")
+    # 同一個時點，排程那個訊號本來就會叫（#23、#24 連續失敗）
     ok, desc = _wd.judge_runs([(24, "failure"), (23, "failure")])
-    check("【真實反例】同一個時點，連續兩次排程失敗會叫",
-          ok is False and "連續失敗" in desc, desc)
+    check("【真實反例】同一個時點，連續兩次排程沒成功會叫",
+          ok is False and "沒成功" in desc, desc)
 
     ok, _ = _wd.judge_runs([(25, "success"), (24, "failure")])
     check("失敗一次之後自己救回來就不叫", ok is True, "最近一次成功＝它恢復了")
@@ -565,15 +567,75 @@ def chain_tests():
     check("只有最近一次失敗不叫（單次抖動）", ok is True)
     ok, _ = _wd.judge_runs([(24, "timed_out"), (23, "failure")])
     check("逾時也算失敗", ok is False)
+    # 【2026/09/21 的真實反例】第一版把 cancelled 從清單裡濾掉，所以沒叫。
+    # 實際是 #38/#39/#40 cancelled、#41 failure；濾掉之後「最近兩次」變成
+    # [#41 failure、#37 success]，只有一個壞的 → 判定過關。
+    ok, desc = _wd.judge_runs([(41, "failure"), (40, "cancelled")])
+    check("【真實反例】cancelled 要算成沒送到，不可以被濾掉",
+          ok is False and "沒成功" in desc, desc)
+    ok, _ = _wd.judge_runs([(40, "cancelled"), (39, "cancelled")])
+    check("連兩次 cancelled 也要叫（排隊 24 小時沒人領，GitHub 砍的）", ok is False)
+
+    # 排隊過久＝runner 沒在線上，這是最早的訊號
+    _now = _dt2.datetime(2026, 9, 19, 12, 0, 0)
+    def _fake_api(payload):
+        def f(url, token):
+            return payload
+        return f
+    _real_api = _wd._api
+    try:
+        _wd._api = _fake_api({"workflow_runs": [
+            {"run_number": 38, "created_at": "2026-09-18T12:13:07Z"},   # 排了 23.8 小時
+            {"run_number": 39, "created_at": "2026-09-19T11:30:00Z"}]}) # 排了 0.5 小時
+        st = _wd.stuck_queued("r", "es-auto.yml", "t", _now)
+        check("排隊超過三小時沒人領會被抓出來",
+              [x[0] for x in st] == [38], f"{st}（剛進隊列的 #39 不算）")
+        _wd._api = _fake_api({"workflow_runs": []})
+        check("沒有卡住的就是空的", _wd.stuck_queued("r", "es-auto.yml", "t", _now) == [])
+    finally:
+        _wd._api = _real_api
+
+    # --- 封網時段守門（排隊中的 run 不受 cron 保護）----------------------
+    _spec2 = _ilu.spec_from_file_location(
+        "netwindow", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                   "tools", "netwindow.py"))
+    _nw = _ilu.module_from_spec(_spec2); _spec2.loader.exec_module(_nw)
+    D2 = _dt2.datetime
+    check("台北 08:05 判成封網（2026/09/21 的 #41 就是這個時間被領走的）",
+          _nw.is_closed(D2(2026, 9, 21, 8, 5)) is True)
+    check("台北 05:59 還在開網", _nw.is_closed(D2(2026, 9, 21, 5, 59)) is False)
+    check("台北 06:00 開始封網", _nw.is_closed(D2(2026, 9, 21, 6, 0)) is True)
+    check("台北 13:59 還在封網", _nw.is_closed(D2(2026, 9, 21, 13, 59)) is True)
+    check("台北 14:00 開網", _nw.is_closed(D2(2026, 9, 21, 14, 0)) is False)
+    check("台北 15:15（cron 那一班）當然是開的",
+          _nw.is_closed(D2(2026, 9, 21, 15, 15)) is False)
+    check("台北 21:00（另一班）也是開的", _nw.is_closed(D2(2026, 9, 21, 21, 0)) is False)
+    check("深夜 01:23（實測落地時間）是開的", _nw.is_closed(D2(2026, 9, 21, 1, 23)) is False)
+    check("還要多久開網算得對", _nw.minutes_until_open(D2(2026, 9, 21, 8, 5)) == 355,
+          "08:05 → 14:00 是 355 分鐘")
+    check("開著的時候回 0", _nw.minutes_until_open(D2(2026, 9, 21, 16, 0)) == 0)
+    # 用 UTC 換算，不靠機器的時區設定
+    check("台北時間是從 UTC 換算的，不看機器時區",
+          _nw.taipei_now(D2(2026, 9, 21, 0, 5)) == D2(2026, 9, 21, 8, 5),
+          "UTC 00:05 → 台北 08:05")
     ok, d2 = _wd.judge_runs([(24, "failure")])
     check("紀錄不足兩次時不判斷（新 repo / 剛改完 workflow）", ok is True, d2)
     ok, _ = _wd.judge_runs([])
     check("完全沒有排程紀錄時不判斷", ok is True)
 
-    # 門檻要跟網站上那則紅字提醒一致，不然兩邊會各講各話
-    check("看門狗的門檻跟 app.js 的 staleNotice 一致",
-          _wd.LAG_MAX.get("TXO") == 1 and _wd.LAG_MAX_DEFAULT == 2,
-          "台指 >1、美股四檔 >2")
+    # 【2026/09/21 改】門檻故意比網站嚴一格，不是不小心不一致
+    check("看門狗的門檻比網站嚴一格（固定在 08:00 跑，該有的落後是定值）",
+          _wd.LAG_MAX.get("TXO") == 1 and _wd.LAG_MAX_DEFAULT == 1,
+          "兩邊都 >1；網站是 台指>1 / 美股>2，寬一點是不要對客戶誤報紅字")
+    # 【2026/09/21 的真實反例】ES 停在 09/16、漏掉 09/17 與 09/18 兩個場次，
+    # 但中間隔著週末，週一早上算出來的落後只有 2——舊門檻（>2）剛好放過去。
+    lag2 = _wd.trading_days_since(D(2026, 9, 16), D(2026, 9, 20), set())
+    check("【真實反例】週末會把「漏兩天」壓成落後 2，舊門檻剛好放過",
+          lag2 == 2 and not (lag2 > 2), f"落後 {lag2}（09/19、09/20 是週末不算）")
+    check("收緊後同一個數字就會叫", lag2 > _wd.LAG_MAX_DEFAULT,
+          f"落後 {lag2} > 門檻 {_wd.LAG_MAX_DEFAULT}")
+    # 正常的一天不可以因此誤報：週二~週五早上該有的落後是 1
+    check("正常日（落後 1）收緊後仍不叫", not (1 > _wd.LAG_MAX_DEFAULT))
     check("五個標的都在看門狗的名單裡",
           {s[0] for s in _wd.SYMBOLS} == {"TXO", "SPX", "ES", "SPY", "QQQ"})
     check("台指看台北、美股看美東",
