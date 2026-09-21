@@ -50,9 +50,19 @@ SYMBOLS = [("TXO", "calendar_tw.txt", 8), ("SPX", "calendar_us.txt", -5),
            ("ES", "calendar_us.txt", -5), ("SPY", "calendar_us.txt", -5),
            ("QQQ", "calendar_us.txt", -5)]
 
+# 刻意停掉的標的：照常把日期印出來，但不讓它害這次執行失敗。
+# 【2026/09/21 起 ES 停用】CME 把紅線那台的 IP 封了，Akamai 的原文說這是
+# "suspected web scraping activity"、而且違反他們網站的 Data Terms of Use。
+# 排程已經整個關掉（見 .github/workflows/es-auto.yml 的說明），所以 ES 的資料
+# 一定會越來越舊——那是預期中的，不是故障，不該每天寄一封信來。
+# 換到有授權的行情來源、或確認可以恢復之後，把 ES 從這個集合拿掉。
+PAUSED = {"ES": "CME 封了紅線的 IP（反爬），排程已停，等換成有授權的行情來源"}
+
 # 要盯的排程。連續兩次「排程觸發」的執行都失敗才算數——手動 dispatch 不列入，
 # 那些多半是在試東西（2026/09/08 我自己就連按了四次失敗的），列進來會誤報。
 WATCHED = ["es-auto.yml", "daily.yml"]
+# 排程已經關掉的 workflow，最近兩次當然不會是 success，不要因此報警
+WATCHED_PAUSED = {"es-auto.yml": "ES 停用中（CME 封 IP）"}
 
 
 def today_in(offset_hours: int, now: dt.datetime = None) -> dt.date:
@@ -93,6 +103,9 @@ def check_data(root: str, now: dt.datetime = None) -> list:
             continue
         hol = engine.load_holidays(os.path.join(root, cal))
         lag = trading_days_since(day, today_in(off, now), hol)
+        if sym in PAUSED:
+            rows.append((sym, td, lag, None, True, f"⏸ 已停用：{PAUSED[sym]}"))
+            continue
         cap = LAG_MAX.get(sym, LAG_MAX_DEFAULT)
         rows.append((sym, td, lag, cap, lag <= cap, ""))
     return rows
@@ -206,6 +219,9 @@ def main() -> int:
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     if repo and token:
         for wf in WATCHED:
+            if wf in WATCHED_PAUSED:
+                lines.append(f"- `{wf}`：⏸ {WATCHED_PAUSED[wf]}，這次不判斷")
+                continue
             try:
                 runs = recent_schedule_runs(repo, wf, token)
             except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as e:
