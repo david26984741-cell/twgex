@@ -765,10 +765,16 @@ def main() -> int:
     json.dump({"dates": hist, "latest": max(hist) if hist else day},
               open(os.path.join(outdir, "index.json"), "w", encoding="utf-8"),
               ensure_ascii=False, separators=(",", ":"))
-    avail = [s for s in symcfg.ORDER
-             if os.path.exists(os.path.join(DATA, s, "latest.json"))]
-    json.dump({"symbols": [{"code": s, "label": symcfg.SPECS[s]["label"],
-                            "desc": symcfg.SPECS[s]["desc"]} for s in avail]},
+    # 換算出來的分頁（derived_from）沒有自己的資料夾，看的是來源那一檔在不在。
+    def _has(s):
+        src = symcfg.SPECS[s].get("derived_from", s)
+        return os.path.exists(os.path.join(DATA, src, "latest.json"))
+    avail = [s for s in symcfg.ORDER if _has(s)]
+    json.dump({"symbols": [dict({"code": s, "label": symcfg.SPECS[s]["label"],
+                                 "desc": symcfg.SPECS[s]["desc"]},
+                                **({"derived_from": symcfg.SPECS[s]["derived_from"]}
+                                   if symcfg.SPECS[s].get("derived_from") else {}))
+                           for s in avail]},
               open(os.path.join(DATA, "symbols.json"), "w", encoding="utf-8"),
               ensure_ascii=False, separators=(",", ":"))
 

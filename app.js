@@ -75,12 +75,102 @@ function getJson(url, must) {
   return p;
 }
 
+/* ---------------------------------------------------------- ES 點位換算
+   ES 分頁不是 ES 自己的選擇權資料，是**把 SPX 的結構換算到 ES 期貨的價格刻度**。
+
+   為什麼換算得出來：ES 選擇權的標的是「最近到期的季月 ES 期貨」（CME 的規格），
+   而期貨價格就是遠期價格；遠期價格我們本來就在算——build.py 對每個到期日都用
+   put-call parity 從 SPX 選擇權自己反解出遠期。取「對到 ES 季月」的那個遠期，
+   就等於拿到了 ES 的期貨價格。ratio = F(季月) / S(現貨)。
+
+   為什麼是乘不是加：基差 ≈ S×(r−q)×T 隨價位等比例變化。用加的在離價平 8% 的
+   履約價上會差五點；用乘的則 **K/F 完全不變**，IV、gamma、skew、flip 全部自動
+   保持一致，不必重算任何希臘字母。（Python 版在 es_view.py，selftest 會拿兩邊對。）
+
+   為什麼在前端算不存檔：換算是純比例，存一份等於把 SPX 的 53 MB 再複製一份進
+   repo，而且會有走樣的風險。前端算的話 SPX 那份已經在快取裡，切過去幾乎不用等。 */
+const DERIVED = {};                       // 分頁 → 真正的資料來源，開站時由 symbols.json 填
+const SRC = s => DERIVED[s] || s;
+const QMON = [3, 6, 9, 12];
+
+function thirdFriday(y, m) {              // 一律用 UTC 算，避開時區把日期弄偏
+  const d = new Date(Date.UTC(y, m - 1, 15));
+  while (d.getUTCDay() !== 5) d.setUTCDate(d.getUTCDate() + 1);
+  return d;
+}
+function quarterlyLtd(after) {            // after 之後最近一個還沒到期的季月
+  const y0 = after.getUTCFullYear();
+  for (const y of [y0, y0 + 1])
+    for (const m of QMON) { const d = thirdFriday(y, m); if (d > after) return d; }
+  return null;
+}
+const ymdKey = d => d.getUTCFullYear() + String(d.getUTCMonth() + 1).padStart(2, '0')
+                  + String(d.getUTCDate()).padStart(2, '0');
+
+function esRatio(d) {
+  const m = d && d.meta; if (!m || !m.s_ref) return null;
+  const p = (m.trade_date || '').replace(/-/g, '/').split('/').map(Number);
+  if (p.length !== 3 || !p[0]) return null;
+  const q = quarterlyLtd(new Date(Date.UTC(p[0], p[1] - 1, p[2])));
+  if (!q) return null;
+  const key = ymdKey(q);
+  // 一定要用 code 不能用 ltd：SPX 的 AM 結算在資料裡 ltd 已經往前挪了一個交易日。
+  // ES 期貨的最後結算也是第三個星期五的 SOQ，跟 SPX 的 AM 同一個東西，優先取 A。
+  const c = (d.expiries || [])
+    .filter(e => String(e.code || '').startsWith(key) && e.F)
+    .sort((a, b) => (String(a.code).endsWith('A') ? 0 : 1)
+                  - (String(b.code).endsWith('A') ? 0 : 1));
+  if (!c.length) return null;
+  const qc = d2 => 'ES' + 'HMUZ'[QMON.indexOf(d2.getUTCMonth() + 1)] + (d2.getUTCFullYear() % 100);
+  // 換倉窗口：季月快到期時，市場的流動性可能已經滾到下一口了。用真的 CME 結算價
+  // 比對過（2026/08~09），離季月 7 天以上時換算誤差平均 −0.08 點、標準差 6.3 點，
+  // 但剩 3、2 天那兩天差了 −73、−88 點——不是算錯，是指到不同的契約。
+  // 只有兩天的樣本不足以挑一個換倉日，所以不挑：兩個季月都算出來，讓人自己判斷。
+  let roll = null;
+  const left = Math.round((q - new Date(Date.UTC(p[0], p[1] - 1, p[2]))) / 864e5);
+  if (left <= 14) {
+    const q2 = quarterlyLtd(q), k2 = q2 && ymdKey(q2);
+    const c2 = q2 ? (d.expiries || []).filter(e => String(e.code || '').startsWith(k2) && e.F)
+      .sort((a, b) => (String(a.code).endsWith('A') ? 0 : 1) - (String(b.code).endsWith('A') ? 0 : 1)) : [];
+    if (c2.length) roll = { days_left: left, next_quarter: qc(q2),
+      next_ratio: c2[0].F / m.s_ref, next_basis: Math.round((c2[0].F - m.s_ref) * 100) / 100 };
+  }
+  return { r: c[0].F / m.s_ref, F: c[0].F, q, code: qc(q), roll };
+}
+
+function deriveES(src) {
+  const info = esRatio(src);
+  if (!info) return null;
+  const d = structuredClone ? structuredClone(src) : JSON.parse(JSON.stringify(src));
+  const r = info.r, m = d.meta, S0 = m.s_ref;
+  const sc = v => Math.round(v * r * 100) / 100;
+  m.s_ref = sc(S0);
+  for (const e of d.expiries || []) if (e.F) e.F = sc(e.F);
+  for (const v of Object.values(d.views || {})) {
+    for (const s of v.strikes || []) s.K = sc(s.K);
+    if (v.curve && v.curve.x) v.curve.x = v.curve.x.map(sc);
+  }
+  Object.assign(m, {
+    symbol: 'ES', label: 'ES 換算', s_label: '期貨',
+    desc: 'SPX 選擇權的曝險結構，換算到 ES（小S&P 期貨）的價格刻度',
+    s_ref_source: `SPX 現貨 × 遠期比（${info.code}，${ymdKey(info.q).replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3')} 到期）`,
+    source: 'SPX 換算（CBOE 報價 ＋ OCC 未平倉），不是 CME 的資料',
+    derived_from: 'SPX', es_ratio: r, es_basis: Math.round((m.s_ref - S0) * 100) / 100,
+    es_quarter: info.code, es_spx_spot: S0, es_roll: info.roll,
+  });
+  return d;
+}
+
 const dataUrl = (sym, day) =>
-  day ? `data/${sym}/history/${day}.json` : `data/${sym}/latest.json`;
+  day ? `data/${SRC(sym)}/history/${day}.json` : `data/${SRC(sym)}/latest.json`;
 
 async function load(sym, day) {
   if (window.__GEXMAP__ && !day) return window.__GEXMAP__;
-  return getJson(dataUrl(sym, day), true);
+  const raw = await getJson(dataUrl(sym, day), true);
+  if (!DERIVED[sym]) return raw;
+  const out = deriveES(raw);
+  if (!out) throw new Error('SPX 的鏈裡找不到 ES 季月，這一天換算不出 ES 的價格刻度');
+  return out;
 }
 
 function loadJson(url) {
@@ -92,7 +182,7 @@ function loadJson(url) {
 function prefetch(sym) {
   if (window.__GEXMAP__ || !sym) return;
   loadJson(dataUrl(sym));
-  loadJson(`data/${sym}/index.json`);
+  loadJson(`data/${SRC(sym)}/index.json`);
 }
 
 function mountDates(idx) {
@@ -125,7 +215,7 @@ async function switchTo(sym, day) {
   const box = $('#err');
   try {
     // 兩個請求同時發：以前是先等資料再等日期清單，兩段來回加起來要一秒多
-    const idxP = loadJson(`data/${sym}/index.json`);
+    const idxP = loadJson(`data/${SRC(sym)}/index.json`);
     S.data = await load(sym, day);
     S.sym = sym;
     if (!day) S.exp = 'ALL';
@@ -219,6 +309,28 @@ function vexConcentration() {
   if (!(share >= VEX_CONC_TH)) return null;
   if (!(days != null && days <= VEX_NEAR_TD)) return null;
   return { share, days, ltd: ex[0].ltd, kind: ex[0].kind };
+}
+
+/* 換算分頁一定要在最上面講清楚它是什麼、不是什麼——這頁最容易被誤讀成
+   「ES 自己的 gamma 結構」，而它其實是別人的部位畫在你的刻度上。 */
+function paintDerivedNote(m) {
+  const el = $('#derivedNote'); if (!el) return;
+  if (!m || !m.derived_from) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const b = m.es_basis;
+  el.style.display = '';
+  el.innerHTML =
+    `<b>這一頁是換算出來的。</b>顯示的是 <b>${m.derived_from} 市場</b>的曝險結構，`
+    + `把價位乘上期貨基差換到 <b>${m.es_quarter || 'ES'}</b> 的刻度上`
+    + (b == null ? '' : `（今天 <b>${b >= 0 ? '+' : ''}${b.toFixed(1)}</b> 點，`
+        + `${m.es_spx_spot ? m.es_spx_spot.toLocaleString() + ' → ' + m.s_ref.toLocaleString() : ''}）`)
+    + `。<br><b>它不是 ES 自己那些選擇權的結構</b>——ES 有自己的未平倉，履約價落在整數的 `
+    + `ES 點位，分佈不一樣。下方的金額仍是 ${m.derived_from} 部位的金額。<br>`
+    + `基差每天重算：季月換倉（3／6／9／12 第三個星期五）會跳一階，平常隨著逼近到期收斂到 0。`
+    + (m.es_roll ? `<br><b>⚠ 換倉中：${m.es_quarter} 只剩 ${m.es_roll.days_left} 天到期`
+        + `，市場的流動性多半已經在 ${m.es_roll.next_quarter}（基差 `
+        + `${m.es_roll.next_basis >= 0 ? '+' : ''}${m.es_roll.next_basis.toFixed(1)} 點）。</b>`
+        + `這一頁用的是 ${m.es_quarter}；要看下一口合約，把上面的點位再加 `
+        + `${(m.es_roll.next_basis - (m.es_basis || 0)).toFixed(1)} 點。` : '');
 }
 
 function paintVexNote() {
@@ -342,6 +454,7 @@ function applyMeta() {
     Math.abs(parseFloat(o.value) - want) < Math.abs(parseFloat(a.value) - want) ? o : a);
   sb.value = opt.value; S.band = parseFloat(opt.value);
   mountBuckets();
+  paintDerivedNote(m);
   $('#symTitle').textContent = m.label;
   $('#mSubline').innerHTML = `<b>${m.trade_date}</b> 收盤`;
   $('#hGex').textContent = m.label + ' 各履約價 GEX';
@@ -1022,7 +1135,7 @@ function methodology() {
   <code>GEX(K) = M × S² × 0.01 × Σ sign × gamma × OI</code>　→　標的每移動 1%，造市商 delta 名目金額的變動量<br>
   <code>VEX(K) = −M × S ÷ 100 × Σ sign × vanna × OI</code>　→　隱含波動率每上升 1 個百分點，造市商 delta 名目金額的變動量<br>
   <code>GEX+ = GEX + β × VEX</code>　→　β 的意思是「標的每移動 1%，隱含波動率反向變動 β 個波動點」<br>
-  <code>M = ${cur}${m.multiplier} / 點</code>（${m.label} 契約乘數）。sign 由上方「造市商假設」決定，三個式子共用。
+  <code>M = ${cur}${m.multiplier} / 點</code>（${m.derived_from || m.label} 契約乘數）。sign 由上方「造市商假設」決定，三個式子共用。${m.derived_from ? `<br><b>這一頁的金額是 ${m.derived_from} 部位的金額</b>，沒有換算成 ES 的 ×$50——換算金額會讓人以為那是 ES 自己的曝險。` : ''}
 
   <h3>2. VEX 用 vanna 不用 vega</h3>
   這張圖描述的是造市商<b>被迫調整的避險流量</b>。vega 講的是部位損益（波動率動了賺賠多少），
@@ -1462,6 +1575,8 @@ function wireSetts() {
     ? [{ code: embedded.meta.symbol, label: embedded.meta.label, desc: embedded.meta.desc }]
     : ((await loadJson('data/symbols.json')) || {}).symbols ||
       [{ code: 'TXO', label: '台指 TXO', desc: '臺灣加權股價指數選擇權' }];
+  // 哪些分頁是換算出來的、來源是誰，由資料自己講，不寫死在前端
+  for (const x of syms) if (x.derived_from) DERIVED[x.code] = x.derived_from;
 
   $('#segSym').innerHTML = syms.map(x =>
     `<button data-v="${x.code}"><b>${x.label}</b><i>${x.desc}</i></button>`).join('');

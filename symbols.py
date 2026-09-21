@@ -33,21 +33,15 @@ SPECS = {
         "price_note": "收盤價",
         "tz_note": "美東時間收盤後更新；未平倉量由 OCC 隔日發布",
     },
+    # ── ES 分頁不是自己的資料來源，是 SPX 換算出來的 ─────────────────────
+    # 2026/09/21 起。原本走 CME 的公開結算表，CME 封了 IP 並指明那違反他們的
+    # Data Terms of Use（見 README 開頭），公司又沒有 CME 的行情授權，所以整條線
+    # 退役。改成把 SPX 的結構換算到 ES 的價格刻度——換算只需要 SPX 自己的鏈，
+    # 不碰 CME。做法與驗證寫在 es_view.py；換算在前端做（app.js 的 deriveES），
+    # 不另外存檔，因為那等於把 SPX 的 53 MB 再複製一份進 repo。
     "ES": {
-        "label": "ES", "desc": "CME 小型 S&P 500 期貨選擇權",
-        "market": "US", "multiplier": 50.0,
-        "currency": "US$", "unit": "百萬美元", "unit_div": 1e6,
-        "settle_next_day": False,           # 逐系列處理：季月選（美式）已在解析時把 ltd 往前挪
-        "calendar": "calendar_us.txt",
-        "parity_band": 0.05,
-        "strike_band": 0.50,
-        "default_view_band": 0.20,
-        "venue": "CME",
-        "source": "CME 公開結算表 + 成交量表（未平倉取當日收盤）",
-        "price_note": "結算價",
-        "tz_note": "美東時間收盤後更新",
-        "spot_note": "主力月期貨結算價",
-        "s_label": "期貨",           # 這是期貨選擇權，沒有「現貨」這回事
+        "label": "ES 換算", "desc": "SPX 的結構換算到小S&P 期貨的點位",
+        "derived_from": "SPX",
     },
     "SPY": {
         "label": "SPY", "desc": "SPDR S&P 500 ETF",

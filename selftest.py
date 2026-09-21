@@ -707,6 +707,94 @@ def chain_tests():
     finally:
         _sh.rmtree(_t2, ignore_errors=True)
 
+    # --- SPX → ES 點位換算 ----------------------------------------------
+    import es_view as _ev
+    D3 = _dt2.date
+    check("第三個星期五算得對（2026/12）", _ev.third_friday(2026, 12) == D3(2026, 12, 18))
+    check("第三個星期五算得對（月初就是星期五的月份）",
+          _ev.third_friday(2027, 1) == D3(2027, 1, 15))
+    # 季月到期當天，front 就換下一口了（我們的鏈本來也會排除當日到期）
+    check("季月到期當天就換到下一口",
+          _ev.quarterly_ltd(D3(2026, 9, 18)) == D3(2026, 12, 18))
+    check("到期前一天還是這一口", _ev.quarterly_ltd(D3(2026, 9, 17)) == D3(2026, 9, 18))
+    check("跨年找得到", _ev.quarterly_ltd(D3(2026, 12, 18)) == D3(2027, 3, 19))
+
+    # 找季月要用 code 不能用 ltd：SPX 的 AM 結算 ltd 已經往前挪了一個交易日
+    _fake = {"expiries": [
+        {"code": "20261218", "ltd": "2026-12-18", "F": 7712.40},
+        {"code": "20261218A", "ltd": "2026-12-17", "F": 7711.65},
+        {"code": "20261231", "ltd": "2026-12-31", "F": 7725.05}]}
+    _e = _ev.find_quarter_expiry(_fake, D3(2026, 12, 18))
+    check("季月優先取 AM 那一檔（ES 期貨也是用第三個星期五的 SOQ 結算）",
+          _e["code"] == "20261218A", f"取到 {_e['code']}")
+    check("用 ltd 找會找錯", _fake["expiries"][1]["ltd"] == "2026-12-17",
+          "AM 那檔的 ltd 是 12/17，不是 12/18")
+
+    # 真的拿一天的 SPX 來換算，檢查「只動價格、不動其他」
+    _sp = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)),
+                         "data", "SPX", "latest.json")
+    if _os2.path.exists(_sp):
+        with open(_sp, encoding="utf-8") as fh:
+            _p = _js.load(fh)
+        _d = _ev.derive(_p)
+        _a, _b = _p["views"]["ALL"], _d["views"]["ALL"]
+        _r = _d["meta"]["es_ratio"]
+        check("換算不動任何金額（GEX / VEX 總量完全一樣）", _a["totals"] == _b["totals"])
+        check("換算不動未平倉", (_a["oi_c"], _a["oi_p"]) == (_b["oi_c"], _b["oi_p"]))
+        check("換算不動情境曲線的 y 值", _a["curve"]["gc"] == _b["curve"]["gc"])
+        check("履約價有被換算", _b["strikes"][0]["K"] != _a["strikes"][0]["K"])
+        check("曲線 x 有被換算，長度不變",
+              _b["curve"]["x"][0] != _a["curve"]["x"][0]
+              and len(_b["curve"]["x"]) == len(_a["curve"]["x"]))
+        # 這是整個換算成立的關鍵：K/F 不變 → IV、gamma、skew、flip 全部自動一致
+        _F0, _F1 = _p["expiries"][0]["F"], _d["expiries"][0]["F"]
+        _w = max(abs((y["K"] / _F1) / (x["K"] / _F0) - 1)
+                 for x, y in zip(_a["strikes"], _b["strikes"]) if x["K"])
+        check("價內外關係 K/F 完全保持不變（所以不必重算任何希臘字母）",
+              _w < 1e-5, f"最大相對偏差 {_w:.1e}，純粹是四捨五入到小數兩位")
+        check("換算後的 meta 有講清楚來源", _d["meta"].get("derived_from") == "SPX"
+              and "不是 CME" in _d["meta"].get("source", ""))
+        check("乘數沒有被改成 ES 的 50（金額還是 SPX 的）",
+              _d["meta"]["multiplier"] == _p["meta"]["multiplier"])
+
+        # 前端（app.js 的 deriveES）與這支 Python 必須逐值相同，不可以各走各的
+        _aj = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)), "app.js")
+        _xj = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)),
+                             "tools", "xcheck_es.js")
+        import subprocess as _sub, shutil as _sh2
+        if _sh2.which("node") and _os2.path.exists(_xj):
+            _r2 = _sub.run(["node", _xj, _aj, _sp], capture_output=True, text=True)
+            if _r2.returncode == 0:
+                _o = _js.loads(_r2.stdout)
+                check("app.js 的 deriveES 與 es_view.py 逐值相同（兩份獨立實作）",
+                      abs(_o["ratio"] - _r) < 1e-12
+                      and _o["s_ref"] == _d["meta"]["s_ref"]
+                      and _o["quarter"] == _d["meta"]["es_quarter"]
+                      and _o["K"] == [x["K"] for x in _b["strikes"]]
+                      and _o["x"] == _b["curve"]["x"],
+                      f"ratio {_o['ratio']:.8f} / {_o['quarter']} / 基差 {_o['basis']:+.2f}")
+            else:
+                check("app.js 的 deriveES 與 es_view.py 逐值相同", False,
+                      f"node 跑不起來：{_r2.stderr[:120]}")
+        else:
+            print("  註：沒有 node，跳過 app.js 與 es_view.py 的對照。", file=sys.stderr)
+
+    # 【2026/08/21~09/16 拿真的 CME 結算價比對過的結論，寫死在這裡當紀錄】
+    # 離季月 7 天以上的 11 天：平均差 −0.08 點、標準差 6.3、最大 12 點 → 方法沒有偏差。
+    # 剩 4／3／2 天那三天：差 −10／−73／−88 點 → 不是算錯，是指到不同的契約
+    #（我們算 9 月，市場的未平倉已經滾到 12 月）。所以換倉窗口要把兩口都算出來。
+    _p2 = {"meta": {"trade_date": "2026/09/16", "s_ref": 7551.81},
+           "expiries": [{"code": "20260918A", "ltd": "2026-09-17", "F": 7535.28},
+                        {"code": "20261218A", "ltd": "2026-12-17", "F": 7601.97}]}
+    _rt, _qe2, _q2, _roll = _ev.ratio_of(_p2)
+    check("換倉窗口裡會把下一口季月也算出來",
+          _roll is not None and _roll["next_quarter"] == "ESZ26",
+          f"{_roll}")
+    check("換倉提醒帶著還剩幾天", _roll["days_left"] == 2)
+    _p3 = dict(_p2, meta={"trade_date": "2026/08/21", "s_ref": 7652.86})
+    _rt3, _, _, _roll3 = _ev.ratio_of(_p3)
+    check("離季月還久的時候不吵換倉", _roll3 is None, "8/21 距 9/18 還有 28 天")
+
     # --- 整批塌掉的守門（ES 2026/09/03 真的發生過）---
     import tempfile, shutil as _sh, json as _json, os as _os
     _b = __import__('build')
