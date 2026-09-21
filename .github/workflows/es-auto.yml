@@ -140,7 +140,10 @@ jobs:
               type build_out.txt >> %GITHUB_STEP_SUMMARY%
               echo ``` >> %GITHUB_STEP_SUMMARY%
               type build_out.txt
-              if !RC! NEQ 0 (
+              rem 只有「後面還有一輪」才等。少了 "%%N"=="1" 這個條件的話，
+              rem 最後一輪失敗後還會再空等 30 分鐘才收工——2026/09/21 實測，
+              rem 兩輪都秒 403，整步卻跑了 62 分鐘，其中 60 分鐘是在空等。
+              if !RC! NEQ 0 if "%%N"=="1" (
                 rem 30 分鐘。用 ping 不用 timeout：timeout 在被重導向的環境下會
                 rem 直接吐「Input redirection is not supported」然後失敗。
                 echo 這一輪沒過，等 30 分鐘讓限流退掉再試。
