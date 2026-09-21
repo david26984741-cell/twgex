@@ -211,6 +211,30 @@ python build.py --symbol ES --json raw/cme_ES.json
 例如 `曝險地圖更新 TXO 2026/08/21 / SPY 2026/08/21 / QQQ 2026/08/20`，
 從 commit 清單一眼就看得出這次有沒有抓到新的一天。
 
+> ## ⛔ ES 自 2026/09/21 起停用 — CME 封了紅線那台的 IP
+>
+> Akamai 回的 403，本體原文：
+>
+> > "This IP address is blocked due to suspected web scraping activity associated with it
+> > on this CMEgroup.com page. Use of scripts, software, spiders, robots, avatars, agents,
+> > tools or other scraping mechanisms is **strictly prohibited by CME Group's website
+> > Data Terms of Use**."
+>
+> 對方已經明確拒絕，而且點名這種用法違反他們網站的使用條款。
+> **不要靠換 IP、換 User-Agent、換另一台機器繞過去**——那是規避刻意設下的存取控制，
+> 不是技術問題。`es-auto.yml` 的排程已經整個關掉（手動觸發保留著），
+> `cme.py` 看到這段訊息會丟 `CMEBlocked` 立刻停、不重試，
+> 看門狗把 ES 標成「⏸ 已停用」不再報警。
+>
+> **回頭看，前面兩次其實是同一件事在升級。** 2026/09/09~10 那個「回 HTTP 200 但
+> `settlements` 是空的」當時被判斷成限流、還加了補抓重試去對抗——那個方向是錯的，
+> 那比較可能是同一套反爬的軟性階段；重試與手動補跑都是往同一個方向加壓，最後變成硬封。
+>
+> 要繼續做 ES 的圖，正確的路是改用**有授權的** CME 行情來源（CME 自己的
+> 付費行情／DataMine，或公司既有的行情授權——群益本身是期貨商，
+> 那跟爬公開網頁是完全不同性質的東西）。下面關於 ES 的段落留著當紀錄，
+> 描述的是停用前的做法。
+
 **【第三條結構性限制：排隊中的 run 不受 cron 保護】**（2026/09/18~21 卡了三天。）
 
 cron 排在開放時段，只保證「run 被**建立**」的時間點是對的。runner 掉線期間 run 會一直
