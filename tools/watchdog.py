@@ -50,19 +50,18 @@ SYMBOLS = [("TXO", "calendar_tw.txt", 8), ("SPX", "calendar_us.txt", -5),
            ("ES", "calendar_us.txt", -5), ("SPY", "calendar_us.txt", -5),
            ("QQQ", "calendar_us.txt", -5)]
 
-# 刻意停掉的標的：照常把日期印出來，但不讓它害這次執行失敗。
-# 【2026/09/21 起 ES 停用】CME 把紅線那台的 IP 封了，Akamai 的原文說這是
-# "suspected web scraping activity"、而且違反他們網站的 Data Terms of Use。
-# 排程已經整個關掉（見 .github/workflows/es-auto.yml 的說明），所以 ES 的資料
-# 一定會越來越舊——那是預期中的，不是故障，不該每天寄一封信來。
-# 換到有授權的行情來源、或確認可以恢復之後，把 ES 從這個集合拿掉。
-PAUSED = {"ES": "CME 封了紅線的 IP（反爬），排程已停，等換成有授權的行情來源"}
+# 不用自己監看的標的：照常把狀態印出來，但不讓它害這次執行失敗。
+# 【2026/09/21 起 ES 改成由 SPX 換算】ES 不再有自己的資料來源與資料夾——
+# 它是前端拿 SPX 乘上期貨基差算出來的（見 es_view.py 與 README）。
+# 所以它的新舊**完全等於 SPX 的新舊**，SPX 那一關過了它就一定是對的，
+# 再單獨看一次只會多一個必定失敗的項目（根本沒有 data/ES/latest.json）。
+PAUSED = {"ES": "由 SPX 換算，沒有自己的資料來源；新舊看 SPX 那一列就夠了"}
 
 # 要盯的排程。連續兩次「排程觸發」的執行都失敗才算數——手動 dispatch 不列入，
 # 那些多半是在試東西（2026/09/08 我自己就連按了四次失敗的），列進來會誤報。
 WATCHED = ["es-auto.yml", "daily.yml"]
 # 排程已經關掉的 workflow，最近兩次當然不會是 success，不要因此報警
-WATCHED_PAUSED = {"es-auto.yml": "ES 停用中（CME 封 IP）"}
+WATCHED_PAUSED = {"es-auto.yml": "已退役（ES 改成由 SPX 換算，不再跑這支）"}
 
 
 def today_in(offset_hours: int, now: dt.datetime = None) -> dt.date:
