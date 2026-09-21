@@ -72,6 +72,22 @@ def http_error_detail(code, reason, headers, body: str) -> str:
     return f"HTTP {code} {reason}｜標頭 {h}｜本體 {b}"
 
 
+# CME 封 IP 時本體裡會出現的字。認出它就立刻停，不要再重試——
+# 對方已經明講這是「suspected web scraping」而且違反他們的 Data Terms of Use，
+# 繼續打只會把封鎖養得更深，而且方向本身就是錯的。
+BLOCK_MARKERS = ("This IP address is blocked", "suspected web scraping",
+                 "scraping mechanisms is strictly prohibited")
+
+
+class CMEBlocked(RuntimeError):
+    """CME 明確表示這個 IP 被封了。不重試、不繞路。"""
+
+
+def looks_blocked(body: str) -> bool:
+    b = body or ""
+    return any(m in b for m in BLOCK_MARKERS)
+
+
 def _get(path: str, params: dict = None, timeout: int = 60, retries: int = 3):
     url = BASE + path + ("?" + urllib.parse.urlencode(params) if params else "")
     last = None
@@ -87,6 +103,14 @@ def _get(path: str, params: dict = None, timeout: int = 60, retries: int = 3):
             except Exception:                       # noqa: BLE001
                 pass
             last = http_error_detail(e.code, e.reason, e.headers, body)
+            if looks_blocked(body):
+                # 【2026/09/21】不進重試迴圈。這不是網路抖動，是對方明確拒絕。
+                raise CMEBlocked(
+                    "CME 已經把這台的對外 IP 封鎖（Akamai 回的原文如下）。\n"
+                    "    這不是網路問題，重試、換 UA、換機器都不該做——那是規避對方\n"
+                    "    刻意設下的存取控制，而且他們明講自動化存取違反 Data Terms of Use。\n"
+                    "    正確的路是改用有授權的 CME 行情來源。\n"
+                    f"    {last}")
             time.sleep(1.5 * (i + 1))
         except Exception as e:                      # noqa: BLE001
             last = e
