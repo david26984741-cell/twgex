@@ -595,6 +595,23 @@ def chain_tests():
     finally:
         _wd._api = _real_api
 
+    # --- 403 要看得出是誰擋的（2026/09/21 查了半天只有一句 Forbidden）----
+    _d = _cme.http_error_detail(403, 'Forbidden',
+        {'Server': 'AkamaiGHost', 'Content-Type': 'text/html',
+         'Set-Cookie': 'x=1', 'Mini-Request-Id': 'abc123'},
+        '<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD>\n'
+        'Reference #18.aabbcc.1758000000.deadbeef')
+    check('403 的訊息會帶出 Server 與 Reference #（Akamai 擋 IP 的樣子）',
+          'AkamaiGHost' in _d and 'Reference #' in _d and '403' in _d, _d[:110])
+    check('不相干的標頭不會被帶出來（Set-Cookie 這種）', 'Set-Cookie' not in _d)
+    _d2 = _cme.http_error_detail(403, 'Forbidden',
+        {'Via': '1.1 proxy.capital.com.tw', 'X-Squid-Error': 'ERR_ACCESS_DENIED 0'},
+        '<html>存取遭拒</html>')
+    check('公司 proxy 擋的樣子也認得出來（Via / X-Squid-Error）',
+          'proxy.capital.com.tw' in _d2 and 'X-Squid-Error' in _d2, _d2[:110])
+    check('本體會壓成一行、截斷', '\n' not in _cme.http_error_detail(403,'x',{}, 'a\nb\nc'))
+    check('沒有標頭也不會炸', isinstance(_cme.http_error_detail(500,'x',None,None), str))
+
     # --- 封網時段守門（排隊中的 run 不受 cron 保護）----------------------
     _spec2 = _ilu.spec_from_file_location(
         "netwindow", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
