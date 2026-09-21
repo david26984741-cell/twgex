@@ -36,6 +36,11 @@ on:
     # ── 台北 21:00（週二~週六）＝美東 09:00，當天的第二次機會
     - cron: '0 13 * * 2-6'
   workflow_dispatch:
+    inputs:
+      date:
+        description: '補某一天（YYYYMMDD）。留空＝自動抓最近一個已收盤的場次。'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -51,6 +56,8 @@ jobs:
   fetch:
     name: 抓 CME 並建圖（紅線）
     runs-on: [self-hosted, cme]
+    outputs:
+      skip: ${{ steps.window.outputs.skip }}
     defaults:
       run:
         # /V:ON＝開延遲環境變數展開，重試迴圈裡的 !RC! 才會每一輪重新取值
@@ -72,7 +79,18 @@ jobs:
           echo %CD%>> pyemb\python312._pth
           pyemb\python.exe -c "import sys; print(sys.version); print(sys.path)"
 
+      # 【2026/09/18~21 加的】cron 排在開放時段還不夠——**排隊中的 run 不受 cron 保護**。
+      # runner 掉線期間 run 會一直排隊，runner 一回來就被領走，不管當下幾點。
+      # 09/21 的 #41 就是排到週一早上 08:05 才被領走，整個在封網時段裡跑，
+      # 抓不到 CME，最後 runner 直接跟伺服器失聯。理由與實際經過寫在 tools/netwindow.py。
+      # 放在裝完 Python 之後，是因為要用 Python 從 UTC 換算台北時間——
+      # 不依賴那台機器的時區設定，cmd 的 date/time 又跟地區設定綁在一起，不可靠。
+      - name: 現在是不是紅線的封網時段
+        id: window
+        run: pyemb\python.exe -X utf8 tools\netwindow.py
+
       - name: 不變量自我測試
+        if: steps.window.outputs.skip != 'true'
         run: pyemb\python.exe -X utf8 selftest.py
 
       # build.py 的訊息一律抄一份進 workflow 摘要。
@@ -93,9 +111,17 @@ jobs:
       #   2. 這裡只留第二輪，中間隔 30 分鐘——短間隔對限流沒有意義。
       # 成功的一輪約 5 分鐘，最壞情況（兩輪都失敗）約 50 分鐘，timeout 兜得住。
       - name: 抓 CME 並建 ES 的圖（失敗的話隔 30 分鐘再一輪）
+        if: steps.window.outputs.skip != 'true'
         timeout-minutes: 150
+        env:
+          # 走環境變數而不是把 ${{ }} 直接插進 cmd 腳本裡：插進去等於讓輸入變成
+          # 可執行的指令，環境變數則只會被當成字串。
+          BACKFILL_DATE: ${{ inputs.date }}
         run: |
           set PYTHONIOENCODING=utf-8
+          set "DARG="
+          if not "%BACKFILL_DATE%"=="" set "DARG=--date %BACKFILL_DATE%"
+          if defined DARG echo === 補跑指定日期：%BACKFILL_DATE%
           set RC=1
           for %%N in (1 2) do (
             if !RC! NEQ 0 (
@@ -106,7 +132,7 @@ jobs:
               rem 而 cme.py 帶的是四段版本號的 Chrome UA（見 cme.py 的 UA 常數）。
               rem 也就是說那個探測是假警報，還把整條線擋死。要重做的話 UA 必須一致，
               rem 而且要先實測過再放進來——排程避開封網時段才是真正的解法。
-              pyemb\python.exe -X utf8 build.py --symbol ES > build_out.txt 2>&1
+              pyemb\python.exe -X utf8 build.py --symbol ES !DARG! > build_out.txt 2>&1
               set RC=!ERRORLEVEL!
               echo ### 第 %%N 輪 build.py 的輸出（離開碼 !RC!^) >> %GITHUB_STEP_SUMMARY%
               echo. >> %GITHUB_STEP_SUMMARY%
@@ -125,6 +151,7 @@ jobs:
           exit /b !RC!
 
       - name: 把結果交出去
+        if: steps.window.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: es-data
@@ -135,6 +162,7 @@ jobs:
   commit:
     name: 提交（GitHub 的機器）
     needs: fetch
+    if: needs.fetch.outputs.skip != 'true'      # 封網時段跳過時沒有東西可提交
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
