@@ -32,6 +32,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional, Tuple
@@ -51,6 +52,26 @@ HDRS = {"User-Agent": UA, "Accept": "application/json, text/plain, */*",
 FUT_PRODUCT = {"ES": 133}
 
 
+# 403 的回應標頭裡，只有這幾個講得出「是誰擋的」
+_BLAME_HEADERS = ("server", "via", "x-cache", "content-type", "mini-request-id",
+                  "x-reference-error", "proxy-connection", "x-squid-error")
+
+
+def http_error_detail(code, reason, headers, body: str) -> str:
+    """把 HTTP 錯誤整理成看得出成因的一行。
+
+    【為什麼要這個——2026/09/21】那天 CME 對紅線那台回 403，
+    錯誤訊息只有「HTTP Error 403: Forbidden」，完全查不出是 **Akamai 擋 IP**
+    還是 **公司的 proxy 擋網址**——兩者要做的事完全不同（前者只能等或換路，
+    後者要找 MIS）。分辨的線索全在回應本體與標頭裡：Akamai 的擋頁會帶
+    「Reference #」與 Server: AkamaiGHost；proxy 的擋頁則多半有 Via / X-Squid-Error
+    或公司自己的頁面。把這些帶出來，下次一眼就知道往哪查。
+    """
+    h = {k: v for k, v in (headers or {}).items() if k.lower() in _BLAME_HEADERS}
+    b = " ".join((body or "").split())[:400]
+    return f"HTTP {code} {reason}｜標頭 {h}｜本體 {b}"
+
+
 def _get(path: str, params: dict = None, timeout: int = 60, retries: int = 3):
     url = BASE + path + ("?" + urllib.parse.urlencode(params) if params else "")
     last = None
@@ -59,6 +80,14 @@ def _get(path: str, params: dict = None, timeout: int = 60, retries: int = 3):
             req = urllib.request.Request(url, headers=HDRS)
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read(2000).decode("utf-8", "replace")
+            except Exception:                       # noqa: BLE001
+                pass
+            last = http_error_detail(e.code, e.reason, e.headers, body)
+            time.sleep(1.5 * (i + 1))
         except Exception as e:                      # noqa: BLE001
             last = e
             time.sleep(1.5 * (i + 1))
