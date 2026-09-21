@@ -34,12 +34,17 @@ sys.path.insert(0, ROOT)
 
 import engine  # noqa: E402  （load_holidays 只有這一份，不要再寫第二個 parser）
 
-# 跟 app.js 的 staleNotice 用同一組門檻。
-# 台指當天就更新（跑之前會落後 1 天）；美股四檔本來就是看前一個交易日（跑之前落後 2 天）。
-# 註：這組門檻對 ES 偏鬆——見上面 2026/09/10 那個例子。等累積幾週的實際落後值
-#     再決定要不要收緊，現在先不憑感覺改，早期預警交給第 2 個訊號。
+# 【2026/09/21 收緊：美股四檔 2 → 1】
+# 這一關現在比網站上那則紅字提醒**嚴一格**，是故意的，理由是兩者跑的時機不同：
+#   ・網站是客戶在任何時間點打開都會看到的，寧可寬一點也不要誤報紅字。
+#   ・這支固定在台北 08:00 跑，那個時點「該有的落後」是算得出來的定值——
+#     週二~週五是 1（前一天晚上那兩班做的是再前一個交易日的場次），週一是 0。
+#     所以 >1 不會誤報，而 2 一定是真的漏了一天。
+# 為什麼要收：2026/09/21 早上 ES 停在 09/16、實際漏掉 09/17 與 09/18 兩個場次，
+# 但中間隔著週末，落後只算出 **2**，在舊的門檻下剛好過關——這已經是第二次被
+# 「剛好卡在門檻上」放過去了（第一次是 09/10 撞到勞動節）。
 LAG_MAX = {"TXO": 1}
-LAG_MAX_DEFAULT = 2
+LAG_MAX_DEFAULT = 1
 
 SYMBOLS = [("TXO", "calendar_tw.txt", 8), ("SPX", "calendar_us.txt", -5),
            ("ES", "calendar_us.txt", -5), ("SPY", "calendar_us.txt", -5),
@@ -103,28 +108,68 @@ def _api(url: str, token: str) -> dict:
 
 
 def recent_schedule_runs(repo: str, wf: str, token: str, want: int = 2) -> list:
-    """最近幾次「排程觸發」而且真的跑完的執行，新的在前。回傳 [(run_number, 結論)]。"""
+    """最近幾次「排程觸發」而且跑完的執行，新的在前。回傳 [(run_number, 結論)]。
+
+    **不可以在這裡挑結論。**第一版只收 success / failure / timed_out，
+    把 cancelled 濾掉了——2026/09/21 就是被這個濾掉而沒叫：那幾天實際是
+    #38 cancelled、#39 cancelled、#40 cancelled、#41 failure，
+    濾掉三個 cancelled 之後「最近兩次」變成 [#41 failure、#37 success]，
+    只有一個壞的，判定過關。但 cancelled 明明就是「這一班沒送到」。
+    """
     url = (f"https://api.github.com/repos/{repo}/actions/workflows/{wf}"
            f"/runs?event=schedule&status=completed&per_page=10")
     j = _api(url, token)
     out = []
     for w in (j.get("workflow_runs") or []):
-        if w.get("conclusion") in ("success", "failure", "timed_out"):
-            out.append((w.get("run_number"), w.get("conclusion")))
+        c = w.get("conclusion")
+        if not c:
+            continue                              # 還沒有結論的（理論上不會出現在 completed）
+        out.append((w.get("run_number"), c))
         if len(out) >= want:
             break
     return out
 
 
 def judge_runs(runs: list) -> tuple:
-    """連續兩次排程都失敗才算壞掉。回傳 (過關嗎, 說明)。"""
+    """連續兩次排程都沒成功才算壞掉。回傳 (過關嗎, 說明)。
+
+    判準是「不是 success 就算沒送到」——cancelled（排隊超過 24 小時沒有 runner
+    來領，GitHub 自己砍掉）跟 failure 一樣，結果都是那一天沒有資料。
+    """
     if len(runs) < 2:
         return True, "排程紀錄不足兩次，先不判斷"
     bad = [r for r in runs[:2] if r[1] != "success"]
     desc = "、".join(f"#{n} {c}" for n, c in runs[:2])
     if len(bad) == 2:
-        return False, f"最近兩次排程連續失敗（{desc}）"
+        return False, f"最近兩次排程連續沒成功（{desc}）"
     return True, f"最近兩次排程：{desc}"
+
+
+# 排隊超過這麼久還沒有 runner 來領，就是那台沒在線上（單位：小時）
+QUEUED_MAX_HOURS = 3
+
+
+def stuck_queued(repo: str, wf: str, token: str, now: dt.datetime = None) -> list:
+    """目前還卡在隊列裡、而且已經排很久的執行。回傳 [(run_number, 排了幾小時)]。
+
+    這是「runner 掉線」最早、也最直接的訊號。2026/09/18 晚上紅線那台掉線之後，
+    #38 在隊列裡躺了整整 24 小時才被 GitHub 砍掉——那 24 小時裡這一關就會叫，
+    比等資料日落後到門檻早了兩天。
+    """
+    now = now or dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    url = (f"https://api.github.com/repos/{repo}/actions/workflows/{wf}"
+           f"/runs?status=queued&per_page=10")
+    j = _api(url, token)
+    out = []
+    for w in (j.get("workflow_runs") or []):
+        try:
+            t = dt.datetime.strptime(w["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+        except (KeyError, ValueError):
+            continue
+        hrs = (now - t).total_seconds() / 3600.0
+        if hrs >= QUEUED_MAX_HOURS:
+            out.append((w.get("run_number"), round(hrs, 1)))
+    return out
 
 
 HOWTO = {
@@ -133,8 +178,10 @@ HOWTO = {
         "  ・「限流」→ CME 的邊緣節點在擋，**隔半小時以上**再按一次 Run workflow，"
         "連續重試只會養深它。\n"
         "  ・「還沒發布」→ 等 CME 發布，晚幾小時再跑。\n"
-        "  ・完全沒有執行紀錄 → 紅線那台的 self-hosted runner 掉線了，"
-        "去 Settings → Actions → Runners 看。\n"
+        "  ・cancelled → **排隊超過 24 小時沒有 runner 來領**，GitHub 自己砍的。"
+        "紅線那台掉線了，去 Settings → Actions → Runners 看。\n"
+        "  ・runner lost communication → 那台跑到一半失聯（2026/09/21 的 #41 是"
+        "在封網時段被領走才這樣）。\n"
         "  手動補跑要挑**台北 14:00 ~ 隔天 06:00**，那台 06:00~14:00 封外網。"),
     "daily.yml": (
         "  多半是期交所或 OCC / CBOE 晚上架。到 Actions 按一次 Run workflow 就會補；"
@@ -168,6 +215,18 @@ def main() -> int:
             lines.append(f"- `{wf}`：{'✅' if ok else '❌'} {desc}")
             if not ok:
                 bad.append(f"{wf} {desc}\n{HOWTO.get(wf, '')}")
+            try:
+                stuck = stuck_queued(repo, wf, token)
+            except (urllib.error.URLError, urllib.error.HTTPError, ValueError):
+                stuck = []
+            if stuck:
+                who = "、".join(f"#{n}（排了 {h} 小時）" for n, h in stuck)
+                lines.append(f"  - ❌ 還卡在隊列裡沒有 runner 來領：{who}")
+                bad.append(f"{wf} 有執行排了超過 {QUEUED_MAX_HOURS} 小時還沒有 runner "
+                           f"來領：{who}\n"
+                           "  這是紅線那台沒在線上。去 Settings → Actions → Runners 看 "
+                           "A51350-W11 是不是 Offline；\n"
+                           "  排超過 24 小時 GitHub 會直接把那一班砍掉（conclusion 變 cancelled）。")
     else:
         lines.append("- 沒有 GITHUB_REPOSITORY / GH_TOKEN，跳過這一段")
 
