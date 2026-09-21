@@ -595,6 +595,38 @@ def chain_tests():
     finally:
         _wd._api = _real_api
 
+    # --- CME 明說封 IP 時，要立刻停、不要重試 ---------------------------
+    # 2026/09/21 Akamai 的 403 本體原文（節錄）。看到這個就不是網路問題，
+    # 是對方明確拒絕，而且點名違反他們的 Data Terms of Use。
+    _blk = ('{"message": "This IP address is blocked due to suspected web scraping '
+            'activity associated with it on this CMEgroup.com page. Use of scripts, '
+            'software, spiders, robots, avatars, agents, tools or other scraping '
+            "mechanisms is strictly prohibited by CME Group's website Data Terms of Use.\"}")
+    check('認得出 CME 的封鎖訊息', _cme.looks_blocked(_blk) is True)
+    check('一般的 403 頁面不會被誤認成封鎖',
+          _cme.looks_blocked('<html>Access Denied</html>') is False)
+    check('空的／None 不會炸', _cme.looks_blocked('') is False and _cme.looks_blocked(None) is False)
+    check('封鎖有自己的例外型別，可以跟一般讀取失敗分開處理',
+          issubclass(_cme.CMEBlocked, RuntimeError))
+
+    # 停用中的標的不可以每天寄信來吵
+    check('ES 被標成停用', 'ES' in _wd.PAUSED)
+    check('es-auto 的排程判斷也一起停', 'es-auto.yml' in _wd.WATCHED_PAUSED)
+    _t3 = _tf.mkdtemp()
+    try:
+        for _s in ('ES', 'SPX'):
+            _os2.makedirs(_os2.path.join(_t3, 'data', _s))
+            with open(_os2.path.join(_t3, 'data', _s, 'latest.json'), 'w') as fh:
+                _js.dump({'meta': {'trade_date': '2026/09/16'}, 'expiries': []}, fh)
+        open(_os2.path.join(_t3, 'calendar_us.txt'), 'w').write('')
+        open(_os2.path.join(_t3, 'calendar_tw.txt'), 'w').write('')
+        _r = dict((x[0], x) for x in _wd.check_data(_t3, _dt2.datetime(2026, 10, 30, 0, 0)))
+        check('停用的 ES 就算落後很多也不算失敗', _r['ES'][4] is True, _r['ES'][5])
+        check('同樣落後的 SPX 照樣要叫', _r['SPX'][4] is False,
+              f"落後 {_r['SPX'][2]} 個交易日")
+    finally:
+        _sh.rmtree(_t3, ignore_errors=True)
+
     # --- 403 要看得出是誰擋的（2026/09/21 查了半天只有一句 Forbidden）----
     _d = _cme.http_error_detail(403, 'Forbidden',
         {'Server': 'AkamaiGHost', 'Content-Type': 'text/html',
