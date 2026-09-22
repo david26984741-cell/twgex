@@ -545,6 +545,30 @@ def _cme_series_guard(args, sym, meta) -> None:
 COLLAPSE_MIN = 0.50
 
 
+def _expired_since(old_payload, new_payload, day):
+    """前一檔有、這次沒有、而且最後交易日 ≤ day 的到期別——也就是「到期了本來就該消失」的那幾批。
+
+    回傳 [{"code", "ltd", "oi"}, ...]，依最後交易日排序。任一邊沒有 expiries 清單就回傳 None，
+    呼叫端完全照舊比。最後交易日還在未來卻消失的不算在內：那正是要擋的殘缺。
+    ltd 接受 2026-09-16、2026/09/16、20260916；缺了或讀不出 8 碼的一律當成還沒到期（不扣）。
+    """
+    old_exp = old_payload.get("expiries") if isinstance(old_payload, dict) else None
+    new_exp = new_payload.get("expiries") if isinstance(new_payload, dict) else None
+    if not isinstance(old_exp, list) or not isinstance(new_exp, list):
+        return None
+    now_codes = {e.get("code") for e in new_exp if isinstance(e, dict)}
+    hits = []
+    for e in old_exp:
+        if not isinstance(e, dict) or e.get("code") in now_codes:
+            continue
+        ltd = "".join(ch for ch in str(e.get("ltd") or "") if ch.isdigit())[:8]
+        if len(ltd) < 8 or ltd > day:
+            continue
+        hits.append((ltd, str(e.get("code")),
+                     {"code": e.get("code"), "ltd": e.get("ltd"), "oi": int(e.get("oi") or 0)}))
+    return [g for _, _, g in sorted(hits, key=lambda t: t[:2])]
+
+
 def _collapse_guard(args, sym, payload, hdir, before, day) -> None:
     """跟前一個交易日比，未平倉總量或到期別數塌掉一半以上就不產出。
 
@@ -557,7 +581,7 @@ def _collapse_guard(args, sym, payload, hdir, before, day) -> None:
 
     所以這裡比的是「跟自己的昨天比」，這是唯一能發現整批消失的角度。
     正常的日間變動遠小於這個門檻（實測 ES 連續交易日之間未平倉變動在 5% 以內）。
-    真的遇到合約大量到期而合理縮水時，加 --allow-stale-oi 放行。
+    當日到期的到期別在比對前已從前一日扣除（2026/09/16 月選結算日被誤擋後加的）；其餘合理縮水仍用 --allow-stale-oi 放行。
     """
     if not before:
         return                                   # 第一天沒得比
@@ -566,23 +590,41 @@ def _collapse_guard(args, sym, payload, hdir, before, day) -> None:
         return                                   # 重跑同一天或補舊資料，不比
     try:
         with open(os.path.join(hdir, prev_day + ".json"), encoding="utf-8") as fh:
-            old = json.load(fh)["meta"]
+            old_payload = json.load(fh)
+        old = old_payload["meta"]
     except Exception:                            # noqa: BLE001
         return
     now = payload["meta"]
+    # 到期的那批本來就該消失：月選結算日光是月選就占前一日未平倉七八成，不扣掉一定被擋。
+    try:
+        gone = _expired_since(old_payload, payload, day) or []
+    except (TypeError, ValueError):              # 前一檔的 expiries 長得不對：照舊比，不扣
+        gone = []
+    ded = {"oi_total": sum(g["oi"] for g in gone), "n_expiries": len(gone)}
     checks = []
     for key, label in (("oi_total", "未平倉總量"), ("n_expiries", "到期別數"),
                        ("n_legs", "契約數")):
         a, b = old.get(key), now.get(key)
         if not a or b is None:
             continue
-        r = b / a
-        checks.append((label, a, b, r))
-    bad = [c for c in checks if c[3] < COLLAPSE_MIN]
+        d = ded.get(key, 0)                      # 契約數不扣：沒有逐到期別的腿數，實測到期日最低也還有 85%
+        if d and a - d <= 0:
+            d = 0                                # 扣完不剩就改用原本的分母
+        r = b / (a - d)
+        checks.append((label, a, d, b, r))
+    bad = [c for c in checks if c[4] < COLLAPSE_MIN]
     if not bad:
+        if gone:
+            print(f"  註：{sym}: 比對時已扣除前一日已到期的 {'、'.join(str(g['code']) for g in gone)}"
+                  f"（合計 {ded['oi_total']:,} 口、{len(gone)} 個到期別）。", file=sys.stderr)
         return
-    lines = [f"    {lab}：{prev_day} 是 {a:,} → 這次只有 {b:,}（剩 {r*100:.1f}%）"
-             for lab, a, b, r in checks]
+    lines = [f"    {lab}：{prev_day} 是 {a:,}"
+             + (f"（扣除已到期 {d:,} → {a - d:,}）→ " if d else " → ")
+             + f"這次只有 {b:,}（剩 {r*100:.1f}%）"
+             for lab, a, d, b, r in checks]
+    if gone:
+        lines.append("    已到期而扣除：" + "、".join(
+            f"{g['code']}（最後交易日 {g['ltd']}，{g['oi']:,} 口）" for g in gone))
     msg = (f"{sym}: 抓回來的量比前一個交易日塌掉一半以上，判定是殘缺的一份，不產出。\n"
            + "\n".join(lines)
            + f"\n    最可能是來源那邊某幾批序列沒抓到（ES 2026/09/03 就這樣掉了 99.5%）。\n"
