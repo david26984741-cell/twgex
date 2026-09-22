@@ -88,6 +88,46 @@ def math_tests():
     n = engine.trading_days_between(dt.date(2026, 8, 20), dt.date(2026, 8, 26), hol)
     check("交易日計數（8/20→8/26 應為 4）", n == 4, f"得到 {n}")
 
+    # 6. 休市日表對期交所 2026 年行事曆（2026/09/22 補齊漏列的 2/12、2/13、9/28、10/26、12/25）
+    import re
+    _here = os.path.dirname(os.path.abspath(__file__))
+    hol = engine.load_holidays(os.path.join(_here, "calendar_tw.txt"))
+    D = dt.date
+    n = round(engine.time_to_expiry(D(2026, 9, 21), D(2026, 9, 29), hol) * 252)
+    check("休市日表：202609F4 在 9/21 剩 5 個交易日", n == 5, f"得到 {n}（舊表漏 9/28 時是 6）")
+    got = (engine.next_trading_day(D(2026, 9, 24), hol),
+           engine.trading_days_between(D(2026, 10, 23), D(2026, 10, 27), hol),
+           engine.trading_days_between(D(2026, 12, 24), D(2026, 12, 28), hol),
+           engine.trading_days_between(D(2026, 2, 11), D(2026, 2, 23), hol))
+    check("休市日表：跨 9/28、10/26、12/25、春節的交易日計數",
+          got == (D(2026, 9, 29), 1, 1, 1), f"得到 {got}")
+    # 前端 app.js 的 loadCal 只濾掉「以 # 開頭」的行、整行當日期；行內註解會讓那一天在網頁上靜默失效
+    bad = []
+    for cal in ("calendar_tw.txt", "calendar_us.txt"):
+        path = os.path.join(_here, cal)
+        front = set()
+        with open(path, encoding="utf-8") as fh:
+            for i, line in enumerate(fh, 1):
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if not re.fullmatch(r"\d{4}/\d{2}/\d{2}", s):
+                    bad.append(f"{cal}:{i} {s!r}")
+                    continue
+                try:
+                    front.add(D(*(int(x) for x in s.split("/"))))
+                except ValueError:
+                    bad.append(f"{cal}:{i} {s!r}")
+        if front != engine.load_holidays(path):
+            bad.append(f"{cal}：前端與 engine 讀出的日期不同")
+    check("休市日表：每行只有日期或整行註解，前後端讀出來相同", not bad, "；".join(bad[:3]))
+    official = {D(2026, m, d) for m, d in (
+        (1, 1), (2, 12), (2, 13), (2, 16), (2, 17), (2, 18), (2, 19), (2, 20), (2, 27),
+        (4, 3), (4, 6), (5, 1), (6, 19), (9, 25), (9, 28), (10, 9), (10, 26), (12, 25))}
+    miss = sorted(official - hol)
+    check("休市日表：期交所公告的 2026 年 18 個平日休市日都有列", not miss,
+          "漏 " + "、".join(d.strftime("%m/%d") for d in miss) if miss else "")
+
 
 def data_tests(csv_path, date=None):
     import taifex
