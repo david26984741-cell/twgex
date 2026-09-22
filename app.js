@@ -1133,7 +1133,7 @@ function methodology() {
 
   <h3>1. 三個定義式</h3>
   <code>GEX(K) = M × S² × 0.01 × Σ sign × gamma × OI</code>　→　標的每移動 1%，造市商 delta 名目金額的變動量<br>
-  <code>VEX(K) = −M × S ÷ 100 × Σ sign × vanna × OI</code>　→　隱含波動率每上升 1 個百分點，造市商 delta 名目金額的變動量<br>
+  <code>VEX(K) = −M × S ÷ 100 × Σ sign × vanna × OI</code>　→　隱含波動率每上升 1 個百分點，造市商必須買進（正）或賣出（負）的標的金額（＝ delta 名目金額變動量的相反數）<br>
   <code>GEX+ = GEX + β × VEX</code>　→　β 的意思是「標的每移動 1%，隱含波動率反向變動 β 個波動點」<br>
   <code>M = ${cur}${m.multiplier} / 點</code>（${m.derived_from || m.label} 契約乘數）。sign 由上方「造市商假設」決定，三個式子共用。${m.derived_from ? `<br><b>這一頁的金額是 ${m.derived_from} 部位的金額</b>，沒有換算成 ES 的 ×$50——換算金額會讓人以為那是 ES 自己的曝險。` : ''}
 
