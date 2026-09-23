@@ -23,9 +23,6 @@ on:
     # 這班也會跑美股四檔，等於是 12:30 那班的第二次機會（GitHub 排程常延遲一到三小時，
     # 兩班都落在安全窗口內；產出相同就不會有提交）。
     - cron: '15 7 * * 1-5'
-    # 註：ES（CME）不在這裡。CME 的邊緣節點擋掉 GitHub Actions 的 IP（純 Python 403、
-    #     無頭 Chromium 走 HTTP/1.1 逾時），抓資料那一步只能從一般網路的機器打。
-    #     ES 走 es-auto.yml，在紅線那台 self-hosted runner 上跑。
   workflow_dispatch:
     inputs:
       symbols:
@@ -101,7 +98,7 @@ jobs:
           for s in ${{ steps.pick.outputs.syms }}; do
             echo "::group::$s"
             if [ "$s" = "ES" ]; then
-              echo "::warning::ES 不從這裡抓（CME 擋 Actions 的 IP），請用 tools/cme.html"
+              echo "::warning::ES 分頁由 SPX 換算，沒有自己的建置步驟，略過"
               echo "::endgroup::"
               continue
             fi
@@ -152,7 +149,7 @@ jobs:
             exit 0
           fi
           # 提交訊息帶上各標的實際的資料日期，從 commit 清單一眼就看得出這次有沒有抓到新的一天
-          DATES=$(python -c "import json,os;print(' / '.join(s+' '+json.load(open(os.path.join('data',s,'latest.json'),encoding='utf-8'))['meta']['trade_date'] for s in ('TXO','SPX','ES','SPY','QQQ') if os.path.exists(os.path.join('data',s,'latest.json'))))")
+          DATES=$(python -c "import json,os;print(' / '.join(s+' '+json.load(open(os.path.join('data',s,'latest.json'),encoding='utf-8'))['meta']['trade_date'] for s in ('TXO','SPX','SPY','QQQ') if os.path.exists(os.path.join('data',s,'latest.json'))))")
           git commit -m "曝險地圖更新 ${DATES:-$(date -u +%Y-%m-%d)}"
           # main 有可能在這次跑的期間被人推過（例如從網頁改了 app.js），
           # 直接 push 會被拒。失敗就 rebase 後重試，最多三次。

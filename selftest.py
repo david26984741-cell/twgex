@@ -21,15 +21,6 @@ FAILS = []
 
 
 
-def _guard_ok(args, meta) -> bool:
-    """把 build 的未平倉守門包成 True/False，方便測。"""
-    import build
-    try:
-        build._cme_oi_guard(args, meta)
-        return True
-    except SystemExit:
-        return False
-
 def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{('  — ' + detail) if detail else ''}")
     if not ok:
@@ -346,231 +337,9 @@ def chain_tests():
           f5 is not None and (abs(f5 - 7660.0) < 0.01 or abs(f5 - 7666.5) < 0.01),
           f"{f5}（{n5} 對；混在一起會落在 7660~7666.5 之間）")
 
-    # --- 掉系列的守門（ES 2026/09/05~07 連三天）---
-    _bb = __import__('build')
-    class _S:
-        allow_stale_oi = False
-    class _S2(_S):
-        allow_stale_oi = True
-    def _try(meta, args=None):
-        try:
-            _bb._cme_series_guard(args or _S(), 'ES', meta)
-            return None
-        except SystemExit as e:
-            return str(e)
-    # 09/07 的真實比例：只抓到 8.6% 的部位 → 系列也掉了大半
-    r = _try({'n_series': 59, 'n_series_lost': 51, 'lost_codes': ['EW1U26', 'EW2U26']})
-    check('問不到的太多會被擋下來', r is not None and '86.4%' in r, (r or '')[:70])
-    # 掉一兩個是常態，要放行
-    r = _try({'n_series': 59, 'n_series_lost': 4, 'lost_codes': ['EW1U26']})
-    check('只有少數問不到照樣產出', r is None, '4/59 = 6.8%，在 10% 門檻內')
-    # 【2026/09/08 的真實反例】87 個系列裡 21 個「問到了但還沒有結算資料」
-    # （2028 季月、2026/10~12 與 2027/10 的週選，都還沒開始交易）。
-    # 第一版把這種也算成失敗，門檻 10%，結果把完全健康的一輪擋掉三次。
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 21, 'empty_codes': ['ESU28']})
-    check('「還沒開始交易」的空系列不算失敗', r is None,
-          '87 個裡 21 個是空的（24%），照樣要產出')
-    # 空的很多、同時真的有幾個問不到 → 只看問不到的那幾個
-    r = _try({'n_series': 87, 'n_series_lost': 5, 'n_series_empty': 21, 'lost_codes': ['EWU26']})
-    check('空系列不會把問不到的比例灌大', r is None, '5/87 = 5.7%，在門檻內')
-    # 空的太多＝CME 還沒發布這一天的結算（跟「問不到」是不同的失敗）
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 70, 'trade_day': '20260907'})
-    check('空得太多會判成「CME 還沒發布」', r is not None and '還沒發布' in r and '80%' in r,
-          (r or '')[:80])
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 43})
-    check('剛好 50% 不擋', r is None, '43/87 = 49.4%')
-    # 錯誤訊息要被帶出來（之後查是逾時還是被擋）
-    r = _try({'n_series': 87, 'n_series_lost': 40, 'lost_codes': ['EWU26'],
-              'lost_errors': ['EWU26: CME 讀取失敗 /CmeWS/...: timed out']})
-    check('擋下來時會附上失敗原因', r is not None and 'timed out' in r, (r or '')[-60:])
-    # 剛好在門檻上
-    r = _try({'n_series': 100, 'n_series_lost': 10, 'lost_codes': []})
-    check('剛好 10% 不擋', r is None, '門檻是「超過 10%」才擋')
-    r = _try({'n_series': 100, 'n_series_lost': 11, 'lost_codes': []})
-    check('超過 10% 就擋', r is not None)
-    # 一個都沒掉
-    r = _try({'n_series': 59, 'n_series_lost': 0, 'lost_codes': []})
-    check('一個都沒掉時不吭聲', r is None)
-    # --json 餵檔的舊路徑沒有這些欄位，不可以因此炸掉
-    r = _try({'n_contracts_all': 100})
-    check('舊路徑（--json）沒有系列計數時不擋', r is None)
-    # 強制放行
-    r = _try({'n_series': 59, 'n_series_lost': 51, 'lost_codes': []}, _S2())
-    check('加了 --allow-stale-oi 可以強行放行（掉系列）', r is None)
-
-    # --- CME 邊緣節點限流：回 HTTP 200 但 settlements 是空的 -------------
-    # 【2026/09/09~10 的真實反例】同一個 trade_day、同一份程式碼連跑六輪，
-    # 「沒有結算資料」的系列數是 50 → 55 → 62 → 76 → 55 → 80，行事曆本身
-    # 也在 87 ↔ 82 之間跳。輸入一樣、結果每次不同，就不可能是「還沒發布」。
-    import cme as _cme
-
-    def _calendar(codes, pids=(9, 11)):
-        return [{"optionType": "EUR", "name": "Weekly Friday",
-                 "productIds": list(pids),
-                 "calendarEntries": [{"productCode": c, "lastTrade": "18 Dec 2026",
-                                      "contractMonth": "DEC 26"} for c in codes]}]
-
-    def _settle_rows():
-        return {"settlements": [{"strike": "7700", "type": "Call", "settle": "50.0",
-                                 "openInterest": "1000", "volume": "10", "last": "50.0"},
-                                {"strike": "7700", "type": "Put", "settle": "40.0",
-                                 "openInterest": "900", "volume": "8", "last": "40.0"}]}
-
-    class _Stub:
-        """假的 CME。可以指定行事曆每次回幾筆、哪些系列這一遍回空的。"""
-        def __init__(self, cals, empty_passes, good_pid=11):
-            self.cals = list(cals)          # 每次要行事曆回哪一份
-            self.empty_passes = empty_passes  # code -> 前幾遍要回空的
-            self.good_pid = good_pid
-            self.n_cal = 0
-            self.n_oof = 0
-            self.seen = {}                  # code -> 已經被問過幾遍
-        def get(self, path, params=None, **kw):
-            if "ProductCalendar" in path:
-                c = self.cals[min(self.n_cal, len(self.cals) - 1)]
-                self.n_cal += 1
-                return c
-            if "/FUT" in path:
-                return {"settlements": [{"month": "DEC 26", "settle": "7700.0",
-                                         "openInterest": "1000000"}]}
-            if "/OOF" in path:
-                self.n_oof += 1
-                pid = int(path.split("/")[-2])
-                code = (params or {}).get("monthYear")
-                if pid != self.good_pid:
-                    return {"settlements": []}      # 錯的 pid：回空
-                n = self.seen.get(code, 0)
-                self.seen[code] = n + 1
-                if n < self.empty_passes.get(code, 0):
-                    return {"settlements": []}      # 被限流：HTTP 200 但內容是空的
-                return _settle_rows()
-            return {}
-
-    def _with_stub(stub, fn):
-        og, ov = _cme._get, _cme.fetch_volume_oi
-        _cme._get = stub.get
-        _cme.fetch_volume_oi = lambda pid, code, td, wm="", rt="": (
-            {("C", 7700.0): (1234, 0), ("P", 7700.0): (1111, 0)}, "F")
-        try:
-            return fn()
-        finally:
-            _cme._get, _cme.fetch_volume_oi = og, ov
-
-    # 行事曆殘缺時取聯集，不能只信一次的結果
-    st = _Stub([_calendar(["A26", "B26"]), _calendar(["A26", "B26", "C26", "D26"])], {})
-    ser = _with_stub(st, lambda: _cme.list_series("ES"))
-    check("行事曆問兩次取聯集，殘的那份不會決定分母",
-          len(ser) == 4, f"第一次 2 筆、第二次 4 筆 → 聯集 {len(ser)} 筆")
-
-    # 同一個 type 底下的系列共用 pid，記住上一個成功的那個就不用每次試錯
-    codes = [f"E{i}26" for i in range(10)]
-    st = _Stub([_calendar(codes)], {})
-    ch, mt = _with_stub(st, lambda: _cme.fetch_chain(
-        "20260910", "ES", pause=0, retry_waits=()))
-    check("記住上一次成功的 pid，不用每個系列都從頭試錯",
-          st.n_oof == 11, f"10 個系列只打了 {st.n_oof} 個結算請求（不記的話是 20）")
-
-    # 限流：昨天有的系列今天空手 → 補抓要把它撈回來
-    st = _Stub([_calendar(codes)], {"E026": 1, "E526": 1, "E726": 2})
-    ch, mt = _with_stub(st, lambda: _cme.fetch_chain(
-        "20260910", "ES", pause=0, known_live=set(codes), retry_waits=(0, 0, 0)))
-    check("被限流回空的系列會被補抓回來",
-          mt["n_recovered"] == 3 and mt["n_known_missing"] == 0,
-          f"補回 {mt['n_recovered']} 個、還缺 {mt['n_known_missing']} 個")
-    check("補抓回來的系列真的有進到鏈裡", len(ch) == 10, f"{len(ch)} 個到期別")
-
-    # 昨天沒有的系列（還沒開始交易的遠月）永遠是空的，不該去補抓它
-    st = _Stub([_calendar(codes)], {c: 99 for c in codes[6:]})
-    ch, mt = _with_stub(st, lambda: _cme.fetch_chain(
-        "20260910", "ES", pause=0, known_live=set(codes[:6]), retry_waits=(0, 0, 0)))
-    check("『還沒開始交易』的空系列不會被反覆補抓",
-          mt["n_known_missing"] == 0 and mt["n_series_empty"] == 4 and mt["n_recovered"] == 0,
-          f"空 {mt['n_series_empty']} 個、基準缺 {mt['n_known_missing']} 個")
-
-    # 昨天有的幾乎全滅＝這一場次還沒發布，補抓只是白打請求，不做
-    st = _Stub([_calendar(codes)], {c: 99 for c in codes})
-    base = None
-    ch, mt = _with_stub(st, lambda: _cme.fetch_chain(
-        "20260910", "ES", pause=0, known_live=set(codes), retry_waits=(0, 0, 0)))
-    check("昨天有的全滅時不補抓（那是還沒發布，重打只會養深限流）",
-          st.n_oof == 20 and mt["n_recovered"] == 0 and mt["n_known_missing"] == 10,
-          f"只打了 {st.n_oof} 個請求（補抓的話會多打幾十個）")
-
-    # --- 有前一天可比時，門檻改看「昨天有、今天沒有」---------------------
-    # 昨天有 60 個、今天缺 20 個 → 擋，而且要說是限流不是還沒發布
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 41,
-              'n_known_live': 60, 'n_known_missing': 20,
-              'known_missing_codes': ['EW1U26'], 'trade_day': '20260909'})
-    check('昨天有、今天缺了三分之一會被擋下來',
-          r is not None and '限流' in r and '33%' in r, (r or '')[:80])
-    check('缺一部分時不會誤報成「還沒發布」', r is not None and '還沒發布' not in r)
-    # 昨天有的全滅 → 訊息要改口說是還沒發布
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 87,
-              'n_known_live': 60, 'n_known_missing': 60, 'trade_day': '20260909'})
-    check('昨天有的全滅時判成「CME 還沒發布」',
-          r is not None and '還沒發布' in r, (r or '')[:80])
-    # 【這是這次改動的重點】空的很多、但昨天有的一個都沒缺 → 照樣產出。
-    # 舊的 empty/n > 50% 那一條會把這種健康的一輪擋掉。
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 70,
-              'n_known_live': 60, 'n_known_missing': 0, 'trade_day': '20260909'})
-    check('空的再多，只要昨天有的都在就照樣產出', r is None,
-          '70/87 是空的，但那 70 個昨天本來就沒有')
-    # 缺一兩個是常態
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 24,
-              'n_known_live': 60, 'n_known_missing': 3, 'trade_day': '20260909'})
-    check('昨天有的缺個位數照樣產出', r is None, '3/60 = 5%，剛好在門檻上')
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 25,
-              'n_known_live': 60, 'n_known_missing': 4, 'trade_day': '20260909'})
-    check('超過 5% 就擋', r is not None)
-    # 沒有基準時（第一次建置）退回舊的粗篩
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 70,
-              'n_known_live': 0, 'trade_day': '20260909'})
-    check('沒有前一天可比時，退回舊的 empty/n 粗篩', r is not None and '還沒發布' in r)
-    # 強制放行
-    r = _try({'n_series': 87, 'n_series_lost': 0, 'n_series_empty': 41,
-              'n_known_live': 60, 'n_known_missing': 20}, _S2())
-    check('加了 --allow-stale-oi 可以強行放行（基準缺件）', r is None)
-
-    # --- 「昨天有哪些系列」這個基準怎麼撈出來的 -------------------------
-    import tempfile as _tf, json as _js, os as _os2, shutil as _sh
-    _tmp = _tf.mkdtemp()
-    _os2.makedirs(_os2.path.join(_tmp, "ES", "history"))
-    _old_data = _bb.DATA
-    def _write(name, trade_date, exps):
-        p = (_os2.path.join(_tmp, "ES", "history", name + ".json") if name
-             else _os2.path.join(_tmp, "ES", "latest.json"))
-        with open(p, "w", encoding="utf-8") as fh:
-            _js.dump({"meta": {"trade_date": trade_date},
-                      "expiries": [{"code": c, "ltd": l} for c, l in exps]}, fh)
-    try:
-        _bb.DATA = _tmp
-        _write("20260909", "2026/09/09",
-               [("EW1U26", "2026-09-11"), ("E2AU26", "2026-09-10"),
-                ("OLDU26", "2026-09-09"), ("ESZ26", "2026-12-18")])
-        kl = _bb._cme_known_live("ES", "20260910")
-        check("基準只留下今天之後才到期的系列",
-              kl == {"EW1U26", "ESZ26"},
-              f"{sorted(kl)}（09-10 當天到期的 E2AU26 與 09-09 就到期的 OLDU26 要被濾掉）")
-        # 只有 latest.json、沒有 history 也要能當基準
-        _os2.remove(_os2.path.join(_tmp, "ES", "history", "20260909.json"))
-        _write(None, "2026/09/09", [("EW1U26", "2026-09-11")])
-        check("沒有 history 時退回 latest.json",
-              _bb._cme_known_live("ES", "20260910") == {"EW1U26"})
-        # 檔裡就是今天（重跑同一天）→ 不能拿自己當基準
-        _write(None, "2026/09/10", [("EW1U26", "2026-09-11")])
-        check("重跑同一天時不拿自己當基準",
-              _bb._cme_known_live("ES", "20260910") == set(),
-              "拿自己比的話永遠不缺，這一關就等於沒有")
-        # 沒有任何檔 → 空集合，退回舊的粗篩，不可以炸掉
-        _bb.DATA = _os2.path.join(_tmp, "nope")
-        check("第一次建置沒有檔時回空集合", _bb._cme_known_live("ES", "20260910") == set())
-    finally:
-        _bb.DATA = _old_data
-        _sh.rmtree(_tmp, ignore_errors=True)
-
     # --- 看門狗：兩個訊號各自擋得住什麼 ---------------------------------
     import importlib.util as _ilu, datetime as _dt2, os as _os
-    import tempfile as _tf, os as _os2, shutil as _sh
+    import tempfile as _tf, json as _js, os as _os2, shutil as _sh
     _spec = _ilu.spec_from_file_location(
         "watchdog", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                                   "tools", "watchdog.py"))
@@ -627,86 +396,14 @@ def chain_tests():
         _wd._api = _fake_api({"workflow_runs": [
             {"run_number": 38, "created_at": "2026-09-18T12:13:07Z"},   # 排了 23.8 小時
             {"run_number": 39, "created_at": "2026-09-19T11:30:00Z"}]}) # 排了 0.5 小時
-        st = _wd.stuck_queued("r", "es-auto.yml", "t", _now)
+        st = _wd.stuck_queued("r", "daily.yml", "t", _now)
         check("排隊超過三小時沒人領會被抓出來",
               [x[0] for x in st] == [38], f"{st}（剛進隊列的 #39 不算）")
         _wd._api = _fake_api({"workflow_runs": []})
-        check("沒有卡住的就是空的", _wd.stuck_queued("r", "es-auto.yml", "t", _now) == [])
+        check("沒有卡住的就是空的", _wd.stuck_queued("r", "daily.yml", "t", _now) == [])
     finally:
         _wd._api = _real_api
 
-    # --- CME 明說封 IP 時，要立刻停、不要重試 ---------------------------
-    # 2026/09/21 Akamai 的 403 本體原文（節錄）。看到這個就不是網路問題，
-    # 是對方明確拒絕，而且點名違反他們的 Data Terms of Use。
-    _blk = ('{"message": "This IP address is blocked due to suspected web scraping '
-            'activity associated with it on this CMEgroup.com page. Use of scripts, '
-            'software, spiders, robots, avatars, agents, tools or other scraping '
-            "mechanisms is strictly prohibited by CME Group's website Data Terms of Use.\"}")
-    check('認得出 CME 的封鎖訊息', _cme.looks_blocked(_blk) is True)
-    check('一般的 403 頁面不會被誤認成封鎖',
-          _cme.looks_blocked('<html>Access Denied</html>') is False)
-    check('空的／None 不會炸', _cme.looks_blocked('') is False and _cme.looks_blocked(None) is False)
-    check('封鎖有自己的例外型別，可以跟一般讀取失敗分開處理',
-          issubclass(_cme.CMEBlocked, RuntimeError))
-
-    # 停用中的標的不可以每天寄信來吵
-    check('ES 被標成停用', 'ES' in _wd.PAUSED)
-    check('es-auto 的排程判斷也一起停', 'es-auto.yml' in _wd.WATCHED_PAUSED)
-    _t3 = _tf.mkdtemp()
-    try:
-        for _s in ('ES', 'SPX'):
-            _os2.makedirs(_os2.path.join(_t3, 'data', _s))
-            with open(_os2.path.join(_t3, 'data', _s, 'latest.json'), 'w') as fh:
-                _js.dump({'meta': {'trade_date': '2026/09/16'}, 'expiries': []}, fh)
-        open(_os2.path.join(_t3, 'calendar_us.txt'), 'w').write('')
-        open(_os2.path.join(_t3, 'calendar_tw.txt'), 'w').write('')
-        _r = dict((x[0], x) for x in _wd.check_data(_t3, _dt2.datetime(2026, 10, 30, 0, 0)))
-        check('停用的 ES 就算落後很多也不算失敗', _r['ES'][4] is True, _r['ES'][5])
-        check('同樣落後的 SPX 照樣要叫', _r['SPX'][4] is False,
-              f"落後 {_r['SPX'][2]} 個交易日")
-    finally:
-        _sh.rmtree(_t3, ignore_errors=True)
-
-    # --- 403 要看得出是誰擋的（2026/09/21 查了半天只有一句 Forbidden）----
-    _d = _cme.http_error_detail(403, 'Forbidden',
-        {'Server': 'AkamaiGHost', 'Content-Type': 'text/html',
-         'Set-Cookie': 'x=1', 'Mini-Request-Id': 'abc123'},
-        '<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD>\n'
-        'Reference #18.aabbcc.1758000000.deadbeef')
-    check('403 的訊息會帶出 Server 與 Reference #（Akamai 擋 IP 的樣子）',
-          'AkamaiGHost' in _d and 'Reference #' in _d and '403' in _d, _d[:110])
-    check('不相干的標頭不會被帶出來（Set-Cookie 這種）', 'Set-Cookie' not in _d)
-    _d2 = _cme.http_error_detail(403, 'Forbidden',
-        {'Via': '1.1 proxy.capital.com.tw', 'X-Squid-Error': 'ERR_ACCESS_DENIED 0'},
-        '<html>存取遭拒</html>')
-    check('公司 proxy 擋的樣子也認得出來（Via / X-Squid-Error）',
-          'proxy.capital.com.tw' in _d2 and 'X-Squid-Error' in _d2, _d2[:110])
-    check('本體會壓成一行、截斷', '\n' not in _cme.http_error_detail(403,'x',{}, 'a\nb\nc'))
-    check('沒有標頭也不會炸', isinstance(_cme.http_error_detail(500,'x',None,None), str))
-
-    # --- 封網時段守門（排隊中的 run 不受 cron 保護）----------------------
-    _spec2 = _ilu.spec_from_file_location(
-        "netwindow", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                                   "tools", "netwindow.py"))
-    _nw = _ilu.module_from_spec(_spec2); _spec2.loader.exec_module(_nw)
-    D2 = _dt2.datetime
-    check("台北 08:05 判成封網（2026/09/21 的 #41 就是這個時間被領走的）",
-          _nw.is_closed(D2(2026, 9, 21, 8, 5)) is True)
-    check("台北 05:59 還在開網", _nw.is_closed(D2(2026, 9, 21, 5, 59)) is False)
-    check("台北 06:00 開始封網", _nw.is_closed(D2(2026, 9, 21, 6, 0)) is True)
-    check("台北 13:59 還在封網", _nw.is_closed(D2(2026, 9, 21, 13, 59)) is True)
-    check("台北 14:00 開網", _nw.is_closed(D2(2026, 9, 21, 14, 0)) is False)
-    check("台北 15:15（cron 那一班）當然是開的",
-          _nw.is_closed(D2(2026, 9, 21, 15, 15)) is False)
-    check("台北 21:00（另一班）也是開的", _nw.is_closed(D2(2026, 9, 21, 21, 0)) is False)
-    check("深夜 01:23（實測落地時間）是開的", _nw.is_closed(D2(2026, 9, 21, 1, 23)) is False)
-    check("還要多久開網算得對", _nw.minutes_until_open(D2(2026, 9, 21, 8, 5)) == 355,
-          "08:05 → 14:00 是 355 分鐘")
-    check("開著的時候回 0", _nw.minutes_until_open(D2(2026, 9, 21, 16, 0)) == 0)
-    # 用 UTC 換算，不靠機器的時區設定
-    check("台北時間是從 UTC 換算的，不看機器時區",
-          _nw.taipei_now(D2(2026, 9, 21, 0, 5)) == D2(2026, 9, 21, 8, 5),
-          "UTC 00:05 → 台北 08:05")
     ok, d2 = _wd.judge_runs([(24, "failure")])
     check("紀錄不足兩次時不判斷（新 repo / 剛改完 workflow）", ok is True, d2)
     ok, _ = _wd.judge_runs([])
@@ -725,11 +422,11 @@ def chain_tests():
           f"落後 {lag2} > 門檻 {_wd.LAG_MAX_DEFAULT}")
     # 正常的一天不可以因此誤報：週二~週五早上該有的落後是 1
     check("正常日（落後 1）收緊後仍不叫", not (1 > _wd.LAG_MAX_DEFAULT))
-    check("五個標的都在看門狗的名單裡",
-          {s[0] for s in _wd.SYMBOLS} == {"TXO", "SPX", "ES", "SPY", "QQQ"})
+    check("四個標的都在看門狗的名單裡",
+          {s[0] for s in _wd.SYMBOLS} == {"TXO", "SPX", "SPY", "QQQ"})
     check("台指看台北、美股看美東",
           dict((s[0], s[2]) for s in _wd.SYMBOLS)["TXO"] == 8
-          and dict((s[0], s[2]) for s in _wd.SYMBOLS)["ES"] == -5)
+          and dict((s[0], s[2]) for s in _wd.SYMBOLS)["SPX"] == -5)
 
     # 資料檔壞掉 / 不見時要當成失敗，不可以安靜略過
     _t2 = _tf.mkdtemp()
@@ -738,7 +435,7 @@ def chain_tests():
         open(_os2.path.join(_t2, "calendar_tw.txt"), "w").write("")
         open(_os2.path.join(_t2, "calendar_us.txt"), "w").write("")
         r = dict((x[0], x) for x in _wd.check_data(_t2))
-        check("latest.json 不見時判成失敗", r["ES"][4] is False, r["ES"][5])
+        check("latest.json 不見時判成失敗", r["SPX"][4] is False, r["SPX"][5])
         with open(_os2.path.join(_t2, "data", "TXO", "latest.json"), "w") as fh:
             fh.write("{ 壞掉的 json")
         r = dict((x[0], x) for x in _wd.check_data(_t2))
@@ -1019,61 +716,11 @@ def chain_tests():
           set(plain) == {"20260918", "20260824"}, str(sorted(plain)))
 
 
-def cme_tests():
-    """CME 結算表的解析：價格字串、季月選（美式）的最後交易日往前挪、同日不同系列不互蓋。"""
-    import cme
-    hol = engine.load_holidays(os.path.join(os.path.dirname(os.path.abspath(__file__)), "calendar_us.txt"))
-    prev = lambda d: engine.prev_trading_day(d, hol)
-    check("結算價字串解析", [cme._num(x) for x in ["7591.25", "1,234.50", "CAB", "-", "", "123.00B", None]]
-          == [7591.25, 1234.50, 0.05, None, None, 123.00, None], "含千分位 / CAB / 買賣價尾綴")
-    dump = {"tradeDate": "08/21/2026", "futures": [["SEP 26", "7691.25", "2,019,214"]],
-            "series": [
-                # 第三個星期五：季月選（美式）與第三週的週五週選同一天到期
-                {"code": "ESU26", "name": "E-mini S&P 500 Options", "type": "AME",
-                 "lastTrade": "18 Sep 2026",
-                 "rows": [["7600.00", "Call", "250.00", "1,111", "10"],
-                          ["7600.00", "Put", "180.00", "2,222", "5"]]},
-                {"code": "EW3U26", "name": "E-mini S&P 500 Friday Weekly Options", "type": "E21",
-                 "lastTrade": "18 Sep 2026",
-                 "rows": [["7600.00", "Call", "249.00", "3,333", "8"],
-                          ["7600.00", "Put", "179.00", "4,444", "3"]]},
-                # 已到期的要被丟掉
-                {"code": "EW3Q26", "name": "E-mini S&P 500 Friday Weekly Options", "type": "E21",
-                 "lastTrade": "21 Aug 2026",
-                 "rows": [["7600.00", "Call", "1.00", "9,999", "0"]]}]}
-    chain, meta = cme.chain_from_dump(dump, prev_td=prev)
-    check("同一天到期的不同系列各自成一格", set(chain) == {"ESU26", "EW3U26"}, str(sorted(chain)))
-    check("季月選（美式）最後交易日往前挪一個交易日",
-          chain.get("ESU26", {}).get("ltd") == dt.date(2026, 9, 17)
-          and chain.get("EW3U26", {}).get("ltd") == dt.date(2026, 9, 18),
-          "ESU26 2026-09-17 / EW3U26 2026-09-18")
-    tot = sum(r["oi"] for b in chain.values() for st in b["strikes"].values() for r in st.values())
-    check("履約價不互相覆蓋、已到期系列被排除", tot == 1111 + 2222 + 3333 + 4444, f"未平倉 {tot}")
-    check("參考價取未平倉最大的期貨結算價", meta["spot"] == 7691.25, str(meta["spot"]))
-    check("舊格式（5 欄）仍讀得動，未平倉標成前一日", meta["oi_asof"] == "prev", meta["oi_asof"])
+def cboe_snapshot_tests():
+    """CBOE 的 prev_day_close 與 last_trade_time 換日時點不同——美股每日更新何時該滾前收的判準。
 
-    # --- 當日未平倉：6 欄格式 ---
-    dump2 = {"tradeDate": "08/21/2026", "oiAsOf": "close", "oiReport": "P",
-             "futures": [["SEP 26", "7691.25", "2,019,214"]],
-             "series": [
-                 {"code": "E4AQ26", "name": "E-mini S&P 500 Monday Weekly Options",
-                  "type": "MW1", "lastTrade": "24 Aug 2026", "oiSrc": "P",
-                  "rows": [["7600.00", "Call", "20.00", "1,500", "10", "1,000"],
-                           ["7600.00", "Put", "18.00", "2,500", "5", "2,000"],
-                           # 成交量表沒列到、結算表未平倉 0 的檔位要被丟掉
-                           ["1000.00", "Put", "0.05", "0", "0", "0"]]}]}
-    c2, m2 = cme.chain_from_dump(dump2, prev_td=prev)
-    tot2 = sum(r["oi"] for b in c2.values() for st in b["strikes"].values() for r in st.values())
-    check("6 欄格式取當日未平倉", tot2 == 4000, f"未平倉 {tot2}（前一日是 3000）")
-    check("未平倉標記為當日收盤",
-          m2["oi_asof"] == "close" and m2["oi_report"] == "P" and m2["oi_merged"] == 1,
-          f"{m2['oi_asof']} / {m2['oi_report']} / 合併 {m2['oi_merged']}")
-    check("前一日未平倉合計仍留著可對帳",
-          m2["oi_total"] == 4000 and m2["oi_prev_total"] == 3000,
-          f"當日 {m2['oi_total']} / 前一日 {m2['oi_prev_total']}")
-    check("未平倉 0 的檔位不進圖", 7600.0 in c2["E4AQ26"]["strikes"] and 1000.0 not in c2["E4AQ26"]["strikes"],
-          str(sorted(c2["E4AQ26"]["strikes"])))
-
+    原本放在 cme_tests() 裡，CME 直連路線退役後整個函式刪掉，這幾項逐字搬過來。
+    """
     # --- CBOE：prev_day_close 與 last_trade_time 換日時點不同 ---
     import cboe as _cboe
     snap = lambda ts, lt, cur=None, pv=None, close=None: _cboe.snapshot_state(
@@ -1106,64 +753,6 @@ def cme_tests():
     e = snap("", "")
     check("欄位缺漏時不會炸、也不會誤判成滾過", e["rolled"] is False, str(e["rolled"]))
 
-    # --- 抓太早：成交量表還沒發布 ---
-    class _A:
-        allow_stale_oi = False
-
-    dump3 = {"tradeDate": "08/21/2026", "oiAsOf": "close", "oiReport": "P",
-             "futures": [["SEP 26", "7691.25", "2,019,214"]],
-             "series": [
-                 {"code": "E4AQ26", "name": "E-mini S&P 500 Monday Weekly Options",
-                  "type": "MW1", "lastTrade": "24 Aug 2026", "oiSrc": "P",
-                  "rows": [["7600.00", "Call", "20.00", "99,000", "10", "98,000"]]},
-                 {"code": "EW3U26", "name": "E-mini S&P 500 Weekly Options",
-                  "type": "EOW", "lastTrade": "18 Sep 2026", "oiSrc": "settle",
-                  "rows": [["7600.00", "Put", "18.00", "500", "5", "500"]]}]}
-    c3, m3 = cme.chain_from_dump(dump3, prev_td=prev)
-    check("退回前一日的系列有被記下來",
-          m3["oi_fellback_codes"] == ["EW3U26"] and m3["oi_fellback_oi"] == 500,
-          f"{m3['oi_fellback_codes']} / {m3['oi_fellback_oi']} 口")
-    check("退回的量很小時照樣產出",
-          _guard_ok(_A(), m3), "500 / 99500 = 0.50%")
-
-    m4 = dict(m3, oi_fellback_oi=50000)
-    check("退回的量占比過大時擋下來", not _guard_ok(_A(), m4), "50000 / 99500 = 50%")
-    m5 = dict(m3, oi_asof="prev")
-    check("整批退回一定擋下來", not _guard_ok(_A(), m5), "oi_asof=prev")
-
-    class _B:
-        allow_stale_oi = True
-    check("加了 --allow-stale-oi 可以放行部分退回", _guard_ok(_B(), m4))
-
-
-    # 2026/09/01 踩到：EW3M28（很遠的週選）未平倉是 0，卻被算成
-    # 「占總未平倉 100.00%（0 / 0 口）」，ES 整批不產出。
-    # 兩個成因都修了：fetch_chain 現在會給 oi_total，guard 也不再把「0 口」當成 100%。
-    check("退回的系列一口部位都沒有時不該擋",
-          _guard_ok(_A(), {"oi_fellback": 1, "oi_fellback_oi": 0, "oi_total": 0,
-                           "oi_fellback_codes": ["EW3M28"]}),
-          "0 / 0 不是 100%，是「沒有東西被弄舊」")
-    check("oi_total 有值、退回 0 口，一樣放行",
-          _guard_ok(_A(), {"oi_fellback": 1, "oi_fellback_oi": 0, "oi_total": 500_000,
-                           "oi_fellback_codes": ["X"]}))
-    # --- 成交量表的月份守門 ---
-    class FakeGet:
-        def __init__(self, month): self.month = month
-        def __call__(self, path, params=None, **kw):
-            return {"monthData": [{"month": self.month, "monthID": "AUG-2026-Calls",
-                                   "strikeData": [{"strike": "7600", "atClose": "5", "change": "1"}]}]}
-    real = cme._get
-    try:
-        cme._get = FakeGet("AUG 2026")
-        ok1 = cme.fetch_volume_oi(5222, "EW4Q26", "20260821", "Aug 2026")
-        cme._get = FakeGet("SEP 2026")
-        ok2 = cme.fetch_volume_oi(5222, "EW4Q26", "20260821", "Aug 2026")
-    finally:
-        cme._get = real
-    check("成交量表月份對得上才合併",
-          ok1 is not None and ok1[0][("C", 7600.0)] == (5, 1) and ok2 is None,
-          "月份不符時回 None，避免併到別的系列")
-
 
 def oi_delta_tests():
     """未平倉增減：前一日的來源有兩種鍵，配錯會讓 Δ 等於整個未平倉量。"""
@@ -1184,7 +773,7 @@ def oi_delta_tests():
     check("逐到期別的前一日：Δ 是逐口相減",
           r["dc"] == 150 and r["dp"] == 0, f'dc={r["dc"]} dp={r["dp"]}')
 
-    # (2) 只有逐履約價合計的前一日（美股 / CME 從自家 JSON 讀回）
+    # (2) 只有逐履約價合計的前一日（美股從自家 JSON 讀回）
     by_k = {("*", 100.0, "C"): 700, ("*", 100.0, "P"): 260}
     r = build.strike_components(legs, 100.0, by_k, 1.0)[0]
     check("只有履約價合計時：加總後再相減，不是每一口都減 0",
@@ -1281,7 +870,7 @@ def main():
     print()
     chain_tests()
     print()
-    cme_tests()
+    cboe_snapshot_tests()
     print()
     oi_delta_tests()
     print()

@@ -248,8 +248,8 @@ td{color:var(--ink2)}
     <div class="row"><div class="k">是什麼</div><div class="t">
       這份快照對應的<b>收盤</b>日期。不是「今天」，是資料所屬的那個交易日。</div></div>
     <div class="row"><div class="k">怎麼讀</div><div class="t">
-      台指是台灣時間當天收盤後才會有；美股四檔（SPX / SPY / QQQ / ES）看到的是<b>前一個美股交易日</b>的收盤，
-      因為未平倉量要等 OCC / CME 隔天早上才發布。所以台灣時間週三早上看，美股那邊顯示的是週一收盤，這是正常的。</div></div>
+      台指是台灣時間當天收盤後才會有；美股三檔（SPX / SPY / QQQ）與由 SPX 換算的 ES 頁，
+      看到的是<b>前一個美股交易日</b>的收盤，因為未平倉量要等 OCC 隔天早上才發布。所以台灣時間週三早上看，美股那邊顯示的是週一收盤，這是正常的。</div></div>
     <div class="row bad"><div class="k">別誤會</div><div class="t">
       這不是盤中即時資料。盤中價格已經在動，但這張圖上的未平倉還停在昨天收盤，
       <b>行情走得越遠，這張圖越舊</b>。開盤後大跌 2%，圖上的 Flip 位置就要自己心裡打折。</div></div>
@@ -264,7 +264,7 @@ td{color:var(--ink2)}
     <div class="row"><div class="k">是什麼</div><div class="t">
       整張圖的參考點。所有「距現貨 %」、所有價平位置，都是相對這個數字算的。<br>
       台指 TXO 用<b>加權指數收盤</b>；SPX / SPY / QQQ 用<b>標的前一交易日收盤</b>；
-      ES 用<b>主力月期貨結算價</b>（所以那一格寫的是「期貨」不是「現貨」）。</div></div>
+      ES 頁用<b>SPX 現貨 × 遠期比換算出的期貨價位</b>（所以那一格寫的是「期貨」不是「現貨」）。</div></div>
     <div class="row bad"><div class="k">別誤會</div><div class="t">
       ES 的參考點是期貨不是現貨指數，兩者會差幾十點（利率與股利的價差）。
       拿 ES 的 Flip 直接對照 SPX 現貨的價位會系統性偏移。</div></div>
@@ -280,7 +280,7 @@ td{color:var(--ink2)}
       這份快照裡真正被算進去的<b>履約價×買賣權組合數</b>，以及涵蓋幾個結算日。</div></div>
     <div class="row"><div class="k">怎麼讀</div><div class="t">
       這兩個數字唯一的用途是<b>檢查資料有沒有缺</b>。各標的的正常量級差很多：<br>
-      台指 TXO 約 1,600 份 / 9 個到期日；SPX 約 2 萬份 / 近 60 個；ES 約 1 萬份 / 約 50 個；
+      台指 TXO 約 1,600 份 / 9 個到期日；SPX 約 2 萬份 / 近 60 個（ES 換算頁與 SPX 相同）；
       SPY、QQQ 各約 9 千份 / 31 個。<b>只跟同一個標的的前幾天比</b>，突然掉到平常的一半就是來源缺資料，不是市場變了。</div></div>
     <div class="row bad"><div class="k">別誤會</div><div class="t">
       契約數多不代表市場活躍，只代表掛出來的履約價多。真正的活躍度要看未平倉與成交量。</div></div>
@@ -768,7 +768,7 @@ td{color:var(--ink2)}
       這是刻意的：如果用即時價格配昨天的未平倉，會得到一張<b>兩個時點混在一起</b>的圖，
       Flip 的位置會錯。寧可晚一天，也不要混。</div></div>
     <div class="row"><div class="k">ES</div><div class="t">
-      CME 的結算表與成交量表，對應<b>前一個交易時段的結算</b>。參考點是主力月期貨結算價。</div></div>
+      由 SPX 換算，時點與 SPX 完全相同；參考點是 SPX 現貨乘上遠期比得到的期貨價位。</div></div>
     <div class="row bad"><div class="k">共通限制</div><div class="t">
       全部都是<b>收盤快照</b>。盤中沒有任何一家（包含付費服務）能拿到即時未平倉，
       因為交易所根本不即時公布。任何宣稱「即時 GEX」的東西，未平倉部分一定還是昨天的。</div></div>
