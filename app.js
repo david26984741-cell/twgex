@@ -246,15 +246,15 @@ const SYM_NOTES = {
   },
   SPX: {
     what: '<b>CBOE</b> 的 S&P 500 <b>指數</b>選擇權（SPX / SPXW），<b>現金結算</b>、歐式，每口 = 指數 × $100。',
-    more: '這是全美最大的一本 S&P gamma 帳。<b>如果你交易的是 CME 的 ES 日選，請看 ES 分頁</b>——那是另一個交易所、另一本帳，'
-        + '同一個指數但部位分佈不一樣。另外本站把 <b>SPX（AM 結算月選）</b>與 <b>SPXW（PM 結算週選 / 日選）</b>拆成獨立的到期別。',
+    more: '這是全美最大的一本 S&P gamma 帳。<b>如果你交易的是 CME 的 ES 日選，請看 ES 分頁</b>——那是這一本帳'
+        + '<b>換算</b>到 ES 期貨價位刻度的版本，價位對得上你的下單畫面。另外本站把 <b>SPX（AM 結算月選）</b>與 <b>SPXW（PM 結算週選 / 日選）</b>拆成獨立的到期別。',
     size: '2026/08/21 未平倉名目約 $17.4 兆 — 約為 SPY 的 12 倍、CME ES 的 10 倍'
   },
   ES: {
     what: '<b>CME</b> 的 E-mini S&P 500 <b>期貨</b>選擇權，被指派後<b>會變成一口 ES 期貨部位</b>（不是現金結算），每口 = 指數 × $50。',
-    more: 'Globex 幾乎 24 小時交易，台灣白天也能調部位。<b>想看整體 S&P 的 gamma 地形請切 SPX 分頁</b>，那本帳大得多；'
-        + '但你實際成交、實際被避險的是這一本。每口只有 SPX 的一半大，部位顆粒度比較細。',
-    size: '2026/08/21 未平倉名目約 $1.76 兆（SPX 的 1/10）；但「每日到期」那一段當日成交 79.8 萬口，與 SPXW 的 98.5 萬口同一量級'
+    more: '<b>本分頁的曝險結構是由 SPX 換算過來的</b>，換的只有價位刻度（把 SPX 的點位乘上遠期比，'
+        + '得到對應的 ES 期貨價位），<b>不是</b> ES 自己那些選擇權的未平倉。'
+        + 'Globex 幾乎 24 小時交易，台灣白天也能調部位；想看原始的那本帳請切 SPX 分頁。'
   },
   SPY: {
     what: '<b>SPY ETF</b> 選擇權，美式，到期<b>交割 100 股 SPY</b>，每口 = 價格 × $100。',
@@ -378,7 +378,7 @@ function pickBand(cap) {
 }
 
 /* ---------------------------------------------------------- 資料過期偵測
-   ES 是人工抓的、排程也可能整天沒跑，資料會安靜地停在某一天。
+   排程可能整天沒跑，資料會安靜地停在某一天。
    這裡用休市日表數「資料日之後到今天為止還有幾個交易日」，超過該有的落差就跳提醒。 */
 const CAL = {};
 function loadCal(file) {
@@ -422,17 +422,9 @@ async function staleNotice(meta) {
   const ok = tw ? 1 : 2;
   if (n <= ok) { box.style.display = 'none'; return; }
   const late = n - ok;
-  // ES 這一段以前寫「要自己用 tools/cme.html 抓」，那是還沒自動化之前的說法，
-  // 現在 es-auto.yml 跑在紅線那台上，會誤導人去做一件不必要的事，所以改掉。
-  const how = meta.symbol === 'ES'
-    ? 'ES 跑在紅線那台上（CME 擋伺服器端的 IP）。到 GitHub 的 Actions 開 '
-      + '<code>es-auto.yml</code> 看最近一次執行：<br>'
-      + '・失敗且訊息說「限流」→ 隔半小時以上再按一次 Run workflow，連續重試只會更糟。<br>'
-      + '・失敗且訊息說「還沒發布」→ 等 CME 發布，晚幾小時再跑。<br>'
-      + '・整個沒有執行紀錄 → 紅線那台的 runner 掉線了。<br>'
-      + '手動補跑要挑在<b>台北 14:00 ~ 隔天 06:00</b>，那台在 06:00~14:00 是封外網的。'
-    : tw ? '可能是期交所檔案延後上架，或排程沒跑——到 GitHub 的 Actions 手動按一次 Run workflow 就會補。'
-         : '可能是排程沒跑或 CBOE 那邊還沒更新——到 GitHub 的 Actions 手動按一次 Run workflow 就會補。';
+  const how = tw
+    ? '可能是期交所檔案延後上架，或排程沒跑——到 GitHub 的 Actions 手動按一次 Run workflow 就會補。'
+    : '可能是排程沒跑或 CBOE 那邊還沒更新——到 GitHub 的 Actions 手動按一次 Run workflow 就會補。';
   box.style.display = '';
   box.innerHTML = `<b>這份資料已經 ${late} 個交易日沒更新。</b>`
     + `目前顯示的是 <b>${meta.trade_date}</b> 的收盤，`
@@ -488,7 +480,7 @@ function applyMeta() {
 
 /* --------------------------------------------------------- 資料整形 */
 function view() { return S.data.views[S.exp] || S.data.views.ALL; }
-// 標的價的稱呼：指數 / ETF 是「現貨」，ES 這種期貨選擇權是「期貨」
+// 標的價的稱呼：指數 / ETF 是「現貨」，ES 換算頁是「期貨」
 function spotWord() { return (S.data && S.data.meta && S.data.meta.s_label) || '現貨'; }
 
 function buckets() {
@@ -1090,12 +1082,12 @@ function segment(host, key, cast, after) {
 
 function methodology() {
   const m = S.data.meta, sym = m.symbol;
-  const tw = sym === 'TXO', cme = sym === 'ES', cboe = !tw && !cme;
+  const tw = sym === 'TXO', cboe = !tw;
   const cur = m.currency || 'NT$';
-  const exch = tw ? '臺灣期貨交易所' : cme ? 'CME' : 'CBOE';
-  const oiPub = tw ? '期交所' : cme ? 'CME' : 'OCC';
+  const exch = tw ? '臺灣期貨交易所' : 'CBOE';
+  const oiPub = tw ? '期交所' : 'OCC';
   const cal = tw ? 'calendar_tw.txt' : 'calendar_us.txt';
-  const und = cme ? '主力月 ES 期貨結算價'
+  const und = m.derived_from ? m.s_ref_source
             : tw ? '證交所的發行量加權股價指數收盤'
                  : 'CBOE 的標的前一交易日收盤價';
 
@@ -1104,11 +1096,6 @@ function methodology() {
 
   const secPrice = tw
     ? `只取<b>一般交易時段</b>與<b>結算價</b>（大量履約價當天沒有成交，收盤價是空的）。`
-    : cme
-    ? `價格取 CME <b>每日結算表</b>的結算價。未平倉量<b>不是</b>取結算表上那一欄——
-       那一欄是<b>前一交易日</b>的；當日收盤的未平倉在<b>成交量表</b>的 <code>atClose</code>，
-       本站把兩張表按（買/賣權、履約價）合併，並用「前一日 ＋ 當日變動 － 當日收盤 = 0」對帳。
-       日選的兩者差距可以到四成以上，取錯整張圖會偏掉。`
     : `價格取每個合約的<b>前一交易日收盤價</b>（<code>prev_day_close</code>），標的價同樣取前一交易日收盤。
        這是刻意的：CBOE 的即時報價是活的，但未平倉量要等 ${oiPub} <b>隔天美東上午</b>才發布，
        <b>沒有任何一個時點能同時拿到對齊的價格與未平倉</b>。用即時價配昨天的未平倉會得到兩個時點混在一起的圖，
@@ -1120,8 +1107,6 @@ function methodology() {
 
   const todo = tw
     ? '・只做 TXO，沒有納入電子、金融、小型台指選擇權。'
-    : cme
-    ? '・只做 ES，沒有納入 NQ、RTY、CL 等其他 CME 商品。'
     : '・沒有納入個股選擇權，只做指數與大型 ETF。';
 
   $('#meth').innerHTML = `
@@ -1149,9 +1134,8 @@ function methodology() {
   <h3>3. 參考標的價與遠期</h3>
   摘要卡上的 <b>${spotWord()} S</b> 取的是${und}，所以 Flip 講出來直接是你看盤軟體上的價位。<br>
   但<b>選擇權定價不用它</b>：每個到期別由自己的${m.price_note} put-call parity 反解遠期
-  <code>F = K + (C − P)</code>（價平 ±3% 取中位數）。${cme
-    ? '期貨選擇權的標的本來就是期貨，反解出來的 F 會很接近該月期貨，這一步主要是吸收各到期別之間的差異。'
-    : '用現貨當標的會讓 parity 破裂，同一履約價的買權與賣權會反解出不同的隱含波動率。'}
+  <code>F = K + (C − P)</code>（價平 ±3% 取中位數）。
+  用現貨當標的會讓 parity 破裂，同一履約價的買權與賣權會反解出不同的隱含波動率。
   情境曲線平移時，各到期別遠期依 <code>F_e × (S / S₀)</code> 同比例移動，保持基差比例。
 
   <h3>4. 隱含波動率只取價外那一側</h3>
@@ -1458,7 +1442,8 @@ function applyFs(v) {
 /* 畫面上只留數字，說明全部收進每一格右上角的 ⓘ。桌機滑過或點一下都會開，手機點一下開。 */
 const CARD_HELP = {
   'k-spot': { t: '現貨 S', a: 'h-spot', h:
-    '這張圖所有計算的基準價。台指與美股用<b>現貨收盤價</b>，ES 用<b>主力月期貨結算價</b>（所以 ES 那頁寫的是「期貨」）。'
+    '這張圖所有計算的基準價。台指與美股用<b>現貨收盤價</b>；ES 換算頁用 SPX 現貨乘上遠期比，'
+    + '得到的是期貨的價位（所以那頁寫的是「期貨」）。'
     + '下面每一個「距現貨 ⋯%」都是跟這個數字比出來的。' },
   'k-flip': { t: 'Gamma Flip', a: 'c-flip', h:
     '總 GEX 由負轉正的那個價位。<b>在它下面</b>，造市商的避險是追漲殺跌，波動會被放大；'

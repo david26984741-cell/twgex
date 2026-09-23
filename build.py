@@ -57,7 +57,7 @@ def strike_components(legs, S_ref, prev_oi, mult, per_expiry=False):
     sw = -mult * S_ref / 100.0
     sv = mult / 100.0
     # 前一日的未平倉有兩種來源：期交所原始檔給得到「逐到期別 × 逐履約價」，
-    # 美股 / CME 只能從前一天產出的 JSON 讀回「逐履約價合計」，鍵是 ("*", K, cp)。
+    # 美股只能從前一天產出的 JSON 讀回「逐履約價合計」，鍵是 ("*", K, cp)。
     # 後者不能逐口相減（配不到到期別，prev 會變成 0，Δ 就等於整個未平倉量），
     # 要等履約價加總完再一次相減。
     by_strike = any(k[0] == "*" for k in prev_oi)
@@ -359,188 +359,6 @@ def load_us(args, sym):
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 
-def load_cme(args, sym):
-    """CME 期貨選擇權（ES）。可用 --json 餵離線抓好的原始結算表。"""
-    import cme
-    import symbols as _sc
-    spec0 = _sc.SPECS[sym]
-    hol = engine.load_holidays(os.path.join(HERE, spec0["calendar"]))
-    prev = lambda d: engine.prev_trading_day(d, hol)
-    if args.json:
-        chain, meta = cme.chain_from_dump(cme.read_json_file(args.json), prev_td=prev)
-        day = args.date or meta["trade_day"]
-    else:
-        day = args.date or us_last_session(hol)
-        chain, meta = cme.fetch_chain(day, sym, prev_td=prev,
-                                      known_live=_cme_known_live(sym, day))
-    prev_oi = {}
-    prior = None
-    hist = os.path.join(DATA, sym, "history")
-    if os.path.isdir(hist):
-        past = sorted(f[:-5] for f in os.listdir(hist) if f.endswith(".json") and f[:-5] < day)
-        if past:
-            prior = past[-1]
-            old = json.load(open(os.path.join(hist, prior + ".json"), encoding="utf-8"))
-            for r in old["views"]["ALL"]["strikes"]:
-                prev_oi[("*", round(r["K"], 2), "C")] = r["oc"]
-                prev_oi[("*", round(r["K"], 2), "P")] = r["op"]
-    extra = {"n_contracts_all": meta.get("n_contracts_all"),
-             "n_requests": meta.get("n_requests"),
-             "oi_asof": meta.get("oi_asof"), "oi_report": meta.get("oi_report"),
-             "n_series": meta.get("n_series"), "n_series_lost": meta.get("n_series_lost"),
-             "n_series_empty": meta.get("n_series_empty"),
-             "n_known_live": meta.get("n_known_live"),
-             "n_known_missing": meta.get("n_known_missing"),
-             "n_recovered": meta.get("n_recovered"),
-             "futures": (meta.get("futures") or [])[:6]}
-    _cme_series_guard(args, sym, meta)
-    _cme_oi_guard(args, meta)
-    return day, chain, prev_oi, args.spot or meta.get("spot"), prior, extra
-
-
-def _cme_known_live(sym: str, trade_day: str) -> set:
-    """上一個交易日那份圖裡、到 trade_day 還沒到期的系列代碼。
-
-    當成「今天一定要有結算資料」的基準——用途見 cme.fetch_chain 的補抓段落。
-    CME 限流時回的是 HTTP 200 ＋ 空的 settlements，跟「這個系列還沒開始交易」
-    在回應上完全一樣，只有拿昨天比才分得出來。
-
-    注意：檔裡的 ltd 對美式月選已經往前挪過一個交易日（fetch_chain 的 _prev），
-    比實際最後交易日早一天，所以這個集合在月選到期當天會少算它一個。
-    少算只會讓補抓少做一個系列，不會製造假的「不見了」，方向是安全的。
-    """
-    hdir = os.path.join(DATA, sym, "history")
-    path = None
-    if os.path.isdir(hdir):
-        past = sorted(f for f in os.listdir(hdir)
-                      if f.endswith(".json") and f[:-5] < trade_day)
-        if past:
-            path = os.path.join(hdir, past[-1])
-    if path is None:
-        p = os.path.join(DATA, sym, "latest.json")
-        path = p if os.path.exists(p) else None
-    if path is None:
-        return set()                                 # 第一次建置，沒得比
-    try:
-        with open(path, encoding="utf-8") as fh:
-            old = json.load(fh)
-    except Exception:                                # noqa: BLE001
-        return set()
-    td = (old.get("meta", {}).get("trade_date") or "").replace("/", "")
-    if not td or td >= trade_day:
-        return set()                                 # 同一天或更新的，不能當基準
-    out = set()
-    for e in old.get("expiries") or []:
-        code, ltd = e.get("code"), e.get("ltd")
-        if not code or not ltd:
-            continue
-        if str(ltd).replace("-", "") <= trade_day:
-            continue                                 # 今天以前就到期了，本來就該不見
-        out.add(code)
-    return out
-
-
-# 一輪裡最多可以「問不到」多少比例的系列還算可用
-SERIES_LOST_MAX = 0.10
-# 沒有前一天可比時的退路：「問到了但沒有結算資料」的正常值約兩成
-#（還沒開始交易的遠月與未來週選），超過一半就不是正常的空
-SERIES_EMPTY_MAX = 0.50
-# 有前一天可比時用這一條：昨天有結算的系列，今天最多可以缺多少。
-# 這是比 SERIES_EMPTY_MAX 準得多的角度——分母只算「今天一定要有」的那些，
-# 不會被「還沒開始交易的遠月」稀釋，也不會被它們灌大。
-KNOWN_MISSING_MAX = 0.05
-
-
-def _cme_series_guard(args, sym, meta) -> None:
-    """CME 抓取時「問不到」的系列太多就當場停下，不要等到後面才發現圖是殘的。
-
-    **要擋的只有「問不到」，不含「問到了但沒資料」——2026/09/08 分不清楚就誤擋了。**
-    CME 的產品行事曆會把還沒開始交易的系列先列出來（實測 87 個裡有 21 個是這種：
-    2028 年的季月、2026/10~12 與 2027/10 的週選），它們回來就是空的，每天都有
-    兩成上下，完全正常。第一版把兩者混在一起，門檻設 10%，結果把健康的一輪也擋掉。
-    分辨方式在 cme.fetch_chain：只要有任何一個 pid 的 HTTP 請求成功回話，
-    就算「問到了」；全部 pid 都拋例外才算失敗。
-
-    **為什麼還是需要這一關，而不是只靠 _collapse_guard。**
-    _collapse_guard 是「跟昨天比」——第一天建置、或前一天剛好也是殘的，
-    就沒有基準可比。這一關不依賴任何歷史檔，是更前面的一道。
-    """
-    n = meta.get("n_series")
-    lost = meta.get("n_series_lost")
-    if not n or lost is None:
-        return                                   # 舊路徑（--json 餵檔）沒有這些欄位
-    empty = meta.get("n_series_empty") or 0
-    day = meta.get("trade_day") or "這個交易日"
-    rec = meta.get("n_recovered") or 0
-    if rec:
-        print(f"  註：{sym} 有 {rec} 個系列第一遍是空的、補抓回來了"
-              f"（CME 邊緣節點限流的樣子，不是還沒發布）。", file=sys.stderr)
-    if empty:
-        print(f"  註：{sym} 這一輪 {n} 個系列裡有 {empty} 個沒有結算資料"
-              f"（{empty/n*100:.0f}%，多半是還沒開始交易的遠月與未來週選）。",
-              file=sys.stderr)
-
-    # ── 有前一天可比的時候，看的是「昨天有、今天沒有」──────────────────────
-    # 【為什麼不能只看 empty/n——2026/09/09~10 的教訓】
-    # empty 的分母 n 裡面本來就有兩成是「還沒開始交易」的遠月與未來週選，
-    # 那是雜訊；而且行事曆自己在限流時也會缺（87 ↔ 82），分母跟著晃。
-    # 拿昨天當基準就乾淨得多：昨天有部位、今天還沒到期的系列，今天不可能真的
-    # 沒有結算，缺一個就是真的缺一個。
-    n_known = meta.get("n_known_live") or 0
-    miss = meta.get("n_known_missing") or 0
-    if n_known:
-        share = miss / n_known
-        if share > KNOWN_MISSING_MAX:
-            codes = "、".join(meta.get("known_missing_codes") or [])
-            if share >= 0.95:
-                why = (f"    昨天有的幾乎全滅：這通常表示 **CME 還沒發布 {day} 的結算**"
-                       f"（發布是整場次一起發的，不會只發一半）。晚幾個小時再跑就有。")
-            else:
-                why = ("    缺的只是一部分——昨天有、今天沒有、而且不是全部。\n"
-                       "    這是 CME 的邊緣節點在限流：**回 HTTP 200 但 settlements 是空的**，\n"
-                       "    跟「還沒開始交易」在回應上長得一樣，所以請求看起來全都成功。\n"
-                       "    **不要馬上連續重跑，重試會把限流養得更深**；隔久一點（半小時以上）再跑。")
-            msg = (f"{sym}: 昨天有結算的 {n_known} 個系列裡，今天有 {miss} 個抓不到"
-                   f"（{share*100:.0f}%），補抓過還是沒有：{codes}\n" + why +
-                   "\n    要強行產出請加 --allow-stale-oi。")
-            if not args.allow_stale_oi:
-                raise SystemExit("  " + msg)
-            print("  警告：" + msg, file=sys.stderr)
-        elif miss:
-            print(f"  註：{sym} 昨天有結算的 {n_known} 個系列裡缺了 {miss} 個"
-                  f"（{share*100:.0f}%），占比不大，照樣產出。", file=sys.stderr)
-    elif n and empty / n > SERIES_EMPTY_MAX:
-        # 沒有前一天可比（第一次建置、或前一份太舊、系列全到期了）時的退路。
-        # 這一條的分母含雜訊，只當粗篩用。
-        msg = (f"{sym}: {n} 個系列裡有 {empty} 個沒有結算資料（{empty/n*100:.0f}%），"
-               f"遠高於正常的兩成。\n"
-               f"    這通常表示 **CME 還沒發布 {day} 的結算**，"
-               f"不是網路問題（請求都成功、只是內容是空的）。\n"
-               f"    等下一輪或晚一點再跑就會有；要強行產出請加 --allow-stale-oi。")
-        if not args.allow_stale_oi:
-            raise SystemExit("  " + msg)
-        print("  警告：" + msg, file=sys.stderr)
-    if lost == 0:
-        return
-    share = lost / n
-    codes = ", ".join(meta.get("lost_codes") or [])
-    line = (f"{sym}: 這一輪 {n} 個系列裡有 {lost} 個**問不到**"
-            f"（{share*100:.1f}%）：{codes}")
-    for e in (meta.get("lost_errors") or []):
-        line += f"\n      {e}"
-    if share <= SERIES_LOST_MAX:
-        print(f"  註：{line}\n    占比不大，照樣產出。", file=sys.stderr)
-        return
-    msg = (line + "\n"
-           + f"    問不到的超過 {SERIES_LOST_MAX*100:.0f}% 就不產出，因為做出來會是一張只有部分部位的圖，\n"
-           + "    而且 oi_coverage 看不出來（它算的是拿到的那些裡面有多少可用）。\n"
-           + "    上面的錯誤訊息可以看出是逾時、被擋、還是 proxy 的問題。\n"
-           + "    要強行產出請加 --allow-stale-oi。")
-    if not args.allow_stale_oi:
-        raise SystemExit("  " + msg)
-    print("  警告：" + msg, file=sys.stderr)
-
-
 # 抓到的量比前一天少這麼多就當成殘缺，不放行
 COLLAPSE_MIN = 0.50
 
@@ -634,41 +452,13 @@ def _collapse_guard(args, sym, payload, hdir, before, day) -> None:
     print("  警告：" + msg, file=sys.stderr)
 
 
-def _cme_oi_guard(args, meta) -> None:
-    """成交量表還沒發布時，收集器會悄悄退回結算表的『前一日』未平倉。
-
-    這件事對帳式抓不到（前一日 ＋ 0 － 前一日 ＝ 0，recon 一樣是 0），
-    只有部分系列退回時 oi_asof 還會是 close，等於完全沒有警訊。
-    所以在這裡擋：退回的系列只要占到總未平倉 1% 以上就直接不產出。
-    """
-    fb_n = int(meta.get("oi_fellback") or 0)
-    fb_oi = int(meta.get("oi_fellback_oi") or 0)
-    oi_tot = int(meta.get("oi_total") or 0)
-    codes = meta.get("oi_fellback_codes") or []
-    if meta.get("oi_asof") == "prev":
-        raise SystemExit(
-            "  未平倉整批退回「前一個交易日」（成交量表一個都沒併進來）。"
-            "這通常表示抓太早、CME 當日的量／未平倉報表還沒發布。不產出。")
-    if not fb_n or fb_oi <= 0:
-        # 退回的系列身上一口部位都沒有，就沒有東西被弄舊，不必擋。
-        # 2026/09/01 踩到：EW3M28（很遠的週選）未平倉是 0，
-        # 卻被算成「占總未平倉 100.00%（0 / 0 口）」而整批不產出。
-        return
-    share = (fb_oi / oi_tot) if oi_tot > 0 else 1.0
-    who = "、".join(str(c) for c in codes[:6]) + ("…" if len(codes) > 6 else "")
-    line = (f"  {fb_n} 個系列的未平倉退回前一日（{who}），"
-            f"占總未平倉 {share:.2%}（{fb_oi:,} / {oi_tot:,} 口）")
-    if share >= 0.01 and not args.allow_stale_oi:
-        raise SystemExit(line + "\n  超過 1%，不產出。確定要照抓請加 --allow-stale-oi。")
-    tail = "，已指定 --allow-stale-oi，照樣產出。" if share >= 0.01 else "，占比很小，照樣產出。"
-    print(line + tail, file=sys.stderr)
-
-
 # --------------------------------------------------------------------------- 主流程
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--symbol", default="TXO", choices=list(symcfg.SPECS))
+    ap.add_argument("--symbol", default="TXO",
+                    choices=[s for s in symcfg.SPECS
+                             if not symcfg.SPECS[s].get("derived_from")])
     ap.add_argument("--csv"); ap.add_argument("--fut-csv"); ap.add_argument("--json")
     ap.add_argument("--date"); ap.add_argument("--spot", type=float)
     ap.add_argument("--spot-file")
@@ -676,7 +466,7 @@ def main() -> int:
     ap.add_argument("--live-price", action="store_true",
                     help="美股：用當下的買賣中價而不是前一交易日收盤（只適合盤中看即時結構）")
     ap.add_argument("--allow-stale-oi", action="store_true",
-                    help="美股：未平倉與價格不同日也照樣產出；ES：未平倉退回前一日也照樣產出")
+                    help="美股：未平倉與價格不同日也照樣產出")
     ap.add_argument("--oi-source", choices=("cboe", "occ"), default="cboe",
                     help="美股未平倉來源。occ ＝ 直接向 OCC 拿逐序列未平倉，"
                          "比 CBOE 那份檔案早十幾個小時（跨週末 2.5 天）；價格仍取 CBOE")
@@ -688,8 +478,6 @@ def main() -> int:
     spec = symcfg.SPECS[sym]
     if spec["market"] == "TW":
         loader = load_tw(args)
-    elif spec.get("venue") == "CME":
-        loader = load_cme(args, sym)
     else:
         loader = load_us(args, sym)
     day, chain, prev_oi, spot, prior, extra = loader

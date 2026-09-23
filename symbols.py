@@ -35,7 +35,7 @@ SPECS = {
     },
     # ── ES 分頁不是自己的資料來源，是 SPX 換算出來的 ─────────────────────
     # 2026/09/21 起。原本走 CME 的公開結算表，CME 封了 IP 並指明那違反他們的
-    # Data Terms of Use（見 README 開頭），公司又沒有 CME 的行情授權，所以整條線
+    # Data Terms of Use（見 README「已退役：CME 直連路線」），公司又沒有 CME 的行情授權，所以整條線
     # 退役。改成把 SPX 的結構換算到 ES 的價格刻度——換算只需要 SPX 自己的鏈，
     # 不碰 CME。做法與驗證寫在 es_view.py；換算在前端做（app.js 的 deriveES），
     # 不另外存檔，因為那等於把 SPX 的 53 MB 再複製一份進 repo。

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""看門狗：每天早上檢查五個標的的資料有沒有跟上，以及排程最近有沒有連續失敗。
+"""看門狗：每天早上檢查四個標的的資料有沒有跟上，以及排程最近有沒有連續失敗。
 
-**這支跑在 GitHub 自己的機器上（ubuntu-latest），跟紅線那台完全無關。**
+**這支跑在 GitHub 自己的機器上（ubuntu-latest）。**
 它只做兩件事：讀 checkout 下來的 `data/*/latest.json`，以及打本 repo 的
-Actions API 問最近的執行結果。**不連 CME、不連期交所、不連 CBOE、不需要瀏覽器。**
-所以紅線那台早上 06:00~14:00 封外網，影響不到它。
+Actions API 問最近的執行結果。**不連任何外部行情來源、不需要瀏覽器。**
 
 兩個獨立的訊號，任一個成立就讓這次執行失敗（GitHub 預設會寄信）：
 
@@ -14,10 +13,10 @@ Actions API 問最近的執行結果。**不連 CME、不連期交所、不連 C
      自己恢復，不是單次抖動。
 
 【為什麼第 2 個是必要的，不能只靠第 1 個】
-2026/09/10 早上 08:00 的真實數字：ES 停在 09/04 已經兩天沒更新，但 09/07 是
+2026/09/10 早上 08:00 的真實數字：某個標的停在 09/04 已經兩天沒更新，但 09/07 是
 美國勞動節，所以「落後幾個交易日」只算出 2，**剛好卡在門檻上不會叫**。
 那天早上單靠第 1 個訊號是安靜的，使用者是下午自己發現的。
-而那個時點 es-auto 已經連續失敗兩次（#23、#24），第 2 個訊號當場就會叫。
+而那個時點那支排程已經連續失敗兩次，第 2 個訊號當場就會叫。
 """
 from __future__ import annotations
 
@@ -40,28 +39,26 @@ import engine  # noqa: E402  （load_holidays 只有這一份，不要再寫第�
 #   ・這支固定在台北 08:00 跑，那個時點「該有的落後」是算得出來的定值——
 #     週二~週五是 1（前一天晚上那兩班做的是再前一個交易日的場次），週一是 0。
 #     所以 >1 不會誤報，而 2 一定是真的漏了一天。
-# 為什麼要收：2026/09/21 早上 ES 停在 09/16、實際漏掉 09/17 與 09/18 兩個場次，
+# 為什麼要收：2026/09/21 早上某個標的停在 09/16、實際漏掉 09/17 與 09/18 兩個場次，
 # 但中間隔著週末，落後只算出 **2**，在舊的門檻下剛好過關——這已經是第二次被
 # 「剛好卡在門檻上」放過去了（第一次是 09/10 撞到勞動節）。
 LAG_MAX = {"TXO": 1}
 LAG_MAX_DEFAULT = 1
 
 SYMBOLS = [("TXO", "calendar_tw.txt", 8), ("SPX", "calendar_us.txt", -5),
-           ("ES", "calendar_us.txt", -5), ("SPY", "calendar_us.txt", -5),
-           ("QQQ", "calendar_us.txt", -5)]
+           ("SPY", "calendar_us.txt", -5), ("QQQ", "calendar_us.txt", -5)]
 
 # 不用自己監看的標的：照常把狀態印出來，但不讓它害這次執行失敗。
-# 【2026/09/21 起 ES 改成由 SPX 換算】ES 不再有自己的資料來源與資料夾——
-# 它是前端拿 SPX 乘上期貨基差算出來的（見 es_view.py 與 README）。
-# 所以它的新舊**完全等於 SPX 的新舊**，SPX 那一關過了它就一定是對的，
-# 再單獨看一次只會多一個必定失敗的項目（根本沒有 data/ES/latest.json）。
-PAUSED = {"ES": "由 SPX 換算，沒有自己的資料來源；新舊看 SPX 那一列就夠了"}
+# 機制留著——日後要暫停某個標的，把它加進來就好；現在沒有這種標的。
+# （ES 是由 SPX 換算出來的分頁，本來就沒有自己的資料夾，不列在 SYMBOLS 裡。）
+PAUSED = {}
 
 # 要盯的排程。連續兩次「排程觸發」的執行都失敗才算數——手動 dispatch 不列入，
 # 那些多半是在試東西（2026/09/08 我自己就連按了四次失敗的），列進來會誤報。
-WATCHED = ["es-auto.yml", "daily.yml"]
-# 排程已經關掉的 workflow，最近兩次當然不會是 success，不要因此報警
-WATCHED_PAUSED = {"es-auto.yml": "已退役（ES 改成由 SPX 換算，不再跑這支）"}
+WATCHED = ["daily.yml"]
+# 排程已經關掉的 workflow，最近兩次當然不會是 success，不要因此報警。
+# 機制留著備用；現在沒有這種 workflow。
+WATCHED_PAUSED = {}
 
 
 def today_in(offset_hours: int, now: dt.datetime = None) -> dt.date:
@@ -164,8 +161,8 @@ QUEUED_MAX_HOURS = 3
 def stuck_queued(repo: str, wf: str, token: str, now: dt.datetime = None) -> list:
     """目前還卡在隊列裡、而且已經排很久的執行。回傳 [(run_number, 排了幾小時)]。
 
-    這是「runner 掉線」最早、也最直接的訊號。2026/09/18 晚上紅線那台掉線之後，
-    #38 在隊列裡躺了整整 24 小時才被 GitHub 砍掉——那 24 小時裡這一關就會叫，
+    這是「沒有 runner 來領」最早、也最直接的訊號。2026/09/18 晚上曾有一次
+    在隊列裡躺了整整 24 小時才被 GitHub 砍掉——那 24 小時裡這一關就會叫，
     比等資料日落後到門檻早了兩天。
     """
     now = now or dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
@@ -185,16 +182,6 @@ def stuck_queued(repo: str, wf: str, token: str, now: dt.datetime = None) -> lis
 
 
 HOWTO = {
-    "es-auto.yml": (
-        "  看那兩次的 job summary 寫什麼：\n"
-        "  ・「限流」→ CME 的邊緣節點在擋，**隔半小時以上**再按一次 Run workflow，"
-        "連續重試只會養深它。\n"
-        "  ・「還沒發布」→ 等 CME 發布，晚幾小時再跑。\n"
-        "  ・cancelled → **排隊超過 24 小時沒有 runner 來領**，GitHub 自己砍的。"
-        "紅線那台掉線了，去 Settings → Actions → Runners 看。\n"
-        "  ・runner lost communication → 那台跑到一半失聯（2026/09/21 的 #41 是"
-        "在封網時段被領走才這樣）。\n"
-        "  手動補跑要挑**台北 14:00 ~ 隔天 06:00**，那台 06:00~14:00 封外網。"),
     "daily.yml": (
         "  多半是期交所或 OCC / CBOE 晚上架。到 Actions 按一次 Run workflow 就會補；"
         "連兩次失敗就要看 log 是不是有別的原因。"),
@@ -239,8 +226,7 @@ def main() -> int:
                 lines.append(f"  - ❌ 還卡在隊列裡沒有 runner 來領：{who}")
                 bad.append(f"{wf} 有執行排了超過 {QUEUED_MAX_HOURS} 小時還沒有 runner "
                            f"來領：{who}\n"
-                           "  這是紅線那台沒在線上。去 Settings → Actions → Runners 看 "
-                           "A51350-W11 是不是 Offline；\n"
+                           "  到 Actions 看那個 run 的狀態；\n"
                            "  排超過 24 小時 GitHub 會直接把那一班砍掉（conclusion 變 cancelled）。")
     else:
         lines.append("- 沒有 GITHUB_REPOSITORY / GH_TOKEN，跳過這一段")
