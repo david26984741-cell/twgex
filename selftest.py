@@ -719,7 +719,7 @@ def chain_tests():
 def cboe_snapshot_tests():
     """CBOE 的 prev_day_close 與 last_trade_time 換日時點不同——美股每日更新何時該滾前收的判準。
 
-    原本放在 cme_tests() 裡，CME 直連路線退役後整個函式刪掉，這幾項逐字搬過來。
+    原本放在已退役的直連路線測試函式裡，該函式刪除後這幾項逐字搬過來。
     """
     # --- CBOE：prev_day_close 與 last_trade_time 換日時點不同 ---
     import cboe as _cboe
