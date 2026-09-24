@@ -24,6 +24,11 @@ from typing import Dict, Optional, Tuple
 
 URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
 UA = "Mozilla/5.0 (compatible; gexmap/1.0)"
+# 備援：Cboe 自己的報價頁（sym＝小寫、不帶底線：spx／spy／qqq）。
+# 2026/09/23 CDN 檔整個停更時，這一頁照常更新，而且 HTML 裡內嵌的就是同一份資料
+# （CTX.contextOptionsData，欄位跟 CDN 檔相同），只是 timestamp 只有時分秒（UTC）。
+PAGE_URL = "https://www.cboe.com/delayed_quotes/{sym}/quote_table"
+PAGE_MARK = "CTX.contextOptionsData = "
 
 SYMBOLS = {
     "SPY": {"name": "SPY", "desc": "SPDR S&P 500 ETF", "multiplier": 100.0,
@@ -56,6 +61,49 @@ def fetch_json(symbol: str, timeout: int = 120) -> dict:
 def read_json_file(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def fetch_page(sym_lower: str, timeout: int = 180) -> str:
+    """抓 Cboe 報價頁的 HTML 原文（SPX 約 16 MB，大半是頁面自帶的代號清單）。例外照拋。"""
+    req = urllib.request.Request(PAGE_URL.format(sym=sym_lower), headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def complete_timestamp(hms: str, now_utc) -> str:
+    """把報價頁只有「時:分:秒」（UTC）的 timestamp 補成 CDN 檔的 'YYYY-MM-DD HH:MM:SS'。
+
+    日期取抓檔當下（now_utc，naive UTC）那天；時分秒比抓檔時刻還晚，代表是跨過 UTC 午夜前的那份，
+    日期往前一天。已經是完整格式就原樣回傳，空字串回空字串。snapshot_state 靠這個日期判斷有沒有換日。
+    """
+    s = (hms or "").strip()
+    if not s:
+        return ""
+    if len(s) >= 19 and s[4] == "-" and s[10] == " ":
+        return s
+    d = now_utc.date()
+    if s > now_utc.strftime("%H:%M:%S"):
+        d -= dt.timedelta(days=1)
+    return f"{d.isoformat()} {s}"
+
+
+def page_payload(html: str, now_utc) -> dict:
+    """從報價頁的 HTML 取出內嵌的 CTX.contextOptionsData，回傳跟 CDN 檔同樣形狀的 dict。
+
+    只找標記後的第一個「{」、用 JSONDecoder.raw_decode 解一個物件就停，不用正規表示式掃 16 MB。
+    找不到標記或解不出物件 → ValueError（頁面改版了，重試沒有用）。
+    """
+    i = html.find(PAGE_MARK)
+    if i < 0:
+        raise ValueError("找不到 CTX.contextOptionsData")
+    j = html.find("{", i + len(PAGE_MARK))
+    if j < 0:
+        raise ValueError("CTX.contextOptionsData 後面找不到物件")
+    payload, _ = json.JSONDecoder().raw_decode(html, j)
+    if not isinstance(payload, dict):
+        raise ValueError("CTX.contextOptionsData 不是物件")
+    payload["timestamp"] = complete_timestamp(payload.get("timestamp") or "", now_utc)
+    return payload
 
 
 def parse_osi(code: str) -> Tuple[str, str, float]:

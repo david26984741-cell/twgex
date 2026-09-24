@@ -1005,6 +1005,53 @@ def us_stall_tests():
     check("結束碼 3＝來源停更（daily.yml 遇到它不重試）", build.EXIT_STALE == 3)
 
 
+def quote_page_tests():
+    """CDN 檔停更時的備援：Cboe 報價頁內嵌的 CTX.contextOptionsData。
+
+    頁面的 timestamp 只有時分秒（UTC），要補上日期才能交給 snapshot_state 判斷換日；
+    資料用 raw_decode 從標記後第一個「{」解一個物件就停。全部用假 HTML，不連網。
+    """
+    import json
+    import cboe as _cboe
+    U = dt.datetime
+
+    check("報價頁時間：補上抓檔當天的日期",
+          _cboe.complete_timestamp("15:19:21", U(2026, 9, 24, 15, 19, 44)) == "2026-09-24 15:19:21",
+          "2026/09/24 實際存檔的那一份")
+    check("報價頁時間：比抓檔時刻還晚＝跨過 UTC 午夜前的那份，日期往前一天",
+          _cboe.complete_timestamp("23:59:50", U(2026, 9, 25, 0, 0, 5)) == "2026-09-24 23:59:50")
+    check("報價頁時間：剛過午夜的那份維持當天",
+          _cboe.complete_timestamp("00:00:03", U(2026, 9, 25, 0, 0, 5)) == "2026-09-25 00:00:03")
+    check("報價頁時間：已經是完整格式就原樣",
+          _cboe.complete_timestamp("2026-09-23 03:56:05", U(2026, 9, 25, 0, 0, 5)) == "2026-09-23 03:56:05")
+    check("報價頁時間：空字串回空字串", _cboe.complete_timestamp("", U(2026, 9, 25, 0, 0, 5)) == "")
+
+    data = {"timestamp": "15:19:21", "symbol": "^SPX",
+            "data": {"symbol": "^SPX", "last_trade_time": "2026-09-24T11:04:19", "prev_day_close": 7706.0298,
+                     "options": [{"option": "SPXW260925C07700000", "bid": 30.1, "ask": 30.4},
+                                 {"option": "SPXW260925P07700000", "bid": 24.2, "ask": 24.5},
+                                 {"option": "SPXW260925C07710000", "bid": 25.0, "ask": 25.3}]}}
+    blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    html = ("<html><head><script>\n"
+            "        CTX.symbolBook = [{\"name\":\"A\",\"company_name\":\"x {y}\"}];\n"
+            f"        CTX.contextOptionsData = {blob};\n"
+            "        CTX.optionsOnFuturesSymbols = {\"ES\": 1};\n"
+            "</script></head><body>…</body></html>")
+    got = _cboe.page_payload(html, U(2026, 9, 24, 15, 19, 44))
+    check("報價頁：取出內嵌資料、選擇權筆數正確",
+          len(got.get("data", {}).get("options", [])) == 3 and got["data"]["prev_day_close"] == 7706.0298)
+    check("報價頁：timestamp 已補成完整日期",
+          got.get("timestamp") == "2026-09-24 15:19:21", str(got.get("timestamp")))
+    check("報價頁：標記後面接著別的 script 也照樣只解一個物件",
+          got.get("symbol") == "^SPX" and "optionsOnFuturesSymbols" not in got)
+    try:
+        _cboe.page_payload("<html><body>Service Unavailable</body></html>", U(2026, 9, 24, 15, 19, 44))
+        no_mark = False
+    except ValueError:
+        no_mark = True
+    check("報價頁：找不到 CTX.contextOptionsData → ValueError（頁面改版，結束碼 3）", no_mark)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
@@ -1021,6 +1068,8 @@ def main():
     occ_tests()
     print()
     us_stall_tests()
+    print()
+    quote_page_tests()
     if a.csv:
         print()
         data_tests(a.csv, a.date)

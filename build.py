@@ -221,15 +221,60 @@ def _occ_contradiction(same, cboe_oi_day, oi_day) -> bool:
     return bool(same and cboe_oi_day and oi_day and cboe_oi_day != oi_day)
 
 
+def _page_payload(sym, cboe_sym):
+    """抓 Cboe 報價頁並取出內嵌資料（備援來源）。
+
+    連不上 → 結束碼 1（下一班再試可能就好）；格式看不懂 → 結束碼 3（頁面改版，重試沒有用）。
+    """
+    import cboe
+    try:
+        html = cboe.fetch_page(cboe_sym.lstrip("_").lower())
+    except (OSError, ValueError) as e:
+        _stop(f"{sym}: Cboe 報價頁連不上（{type(e).__name__}: {e}），先不要產出。\n"
+              f"    等下一班再跑即可。", 1)
+    try:
+        return cboe.page_payload(html, dt.datetime.utcnow())
+    except ValueError as e:
+        _stop(f"{sym}: Cboe 報價頁的格式看不懂（{e}），不產出。\n"
+              f"    多半是頁面改版了，重試沒有用，要改程式。", EXIT_STALE)
+
+
 def load_us(args, sym):
     import cboe
     import symbols as _sc
     spec0 = _sc.SPECS[sym]
-    payload = (cboe.read_json_file(args.json) if args.json
-               else cboe.fetch_json(spec0.get("cboe_symbol", sym)))
     hol = engine.load_holidays(os.path.join(HERE, spec0["calendar"]))
     prev = lambda d: engine.prev_trading_day(d, hol)
     session = args.date or (None if args.json else us_last_session(hol))
+    # 照日曆最近一個已收盤的交易日；下面判斷報價有沒有過期都拿它比
+    expected = args.date or us_last_session(hol)
+
+    # ── 報價從哪裡來：平常抓 CDN 檔，CDN 停更或連不上才改抓報價頁（每班每標的至多 1 次）──
+    # 2026/09/23 03:56 UTC 起 CDN 檔整個停更，Cboe 自己的報價頁照常更新、內嵌的是同一份資料。
+    # CDN 一恢復，下一班自動回到 CDN，不用人動。
+    quote_source = getattr(args, "quote_source", "auto")
+    cboe_sym = spec0.get("cboe_symbol", sym)
+    fell_back = False
+    if args.json:
+        payload, quote_source = cboe.read_json_file(args.json), "file"
+    elif quote_source == "page":
+        payload = _page_payload(sym, cboe_sym)
+    else:
+        try:
+            payload = cboe.fetch_json(cboe_sym)
+            why = None
+            cdn_sess = cboe.snapshot_state(payload)["sess"]
+            if cboe.quote_stale(cdn_sess, expected):
+                why = f"CDN 檔停在 {fmt_date(cdn_sess)}，照日曆應該是 {fmt_date(expected)}"
+        except (OSError, ValueError) as e:              # 連不上（urllib 的錯都是 OSError）或看不懂
+            if quote_source == "cdn":
+                raise
+            payload, why = None, f"CDN 檔連不上或看不懂（{type(e).__name__}: {e}）"
+        if why and quote_source == "auto":
+            print(f"  註：{sym}: {why}，改抓 Cboe 報價頁。", file=sys.stderr)
+            payload, quote_source, fell_back = _page_payload(sym, cboe_sym), "page", True
+        else:
+            quote_source = "cdn"
 
     # CBOE 這份檔案裡，價格是即時的、未平倉量是 OCC 隔天早上才更新的，兩者永遠差一個交易日。
     # 所以價格一律取每一檔的 prev_day_close（前一交易日收盤），這樣只要在
@@ -242,11 +287,11 @@ def load_us(args, sym):
     # 2026/09/23 03:56 UTC 起 CDN 檔整個停更、停在 9/22 收盤，9/24 那幾班照樣產出，
     # 把 9/22 的報價配上 OCC 9/23 的未平倉、標成 9/22。日曆上最近一個已收盤的交易日
     # 比檔案裡的場次還新，就是檔案停更了——重試沒有用，以結束碼 3 收場。
-    expected = args.date or us_last_session(hol)
     if cboe.quote_stale(sess, expected):
+        both = ("CDN 檔與報價頁都停在這一天，" if fell_back else "")
         msg = (f"{sym}: Cboe 報價停在 {fmt_date(sess)}，"
                f"照日曆最近一個已收盤的交易日是 {fmt_date(expected)}，不產出。\n"
-               f"    檔案時間 {payload.get('timestamp') or '不明'}（UTC）。來源停更，重試沒有用，"
+               f"    {both}檔案時間 {payload.get('timestamp') or '不明'}（UTC）。來源停更，重試沒有用，"
                f"等 Cboe 恢復或下一班再看。\n"
                f"    離線重跑舊檔請加 --date；要強行產出請加 --allow-stale-oi。")
         if not args.allow_stale_oi:
@@ -431,7 +476,7 @@ def load_us(args, sym):
              "fwd_check": meta.get("fwd_check"), "n_no_price": meta.get("n_no_price"),
              "oi_as_of": fmt_date(oi_day or price_day), "price_as_of": fmt_date(price_day),
              "oi_source": meta.get("oi_source"), "n_oi_lost": meta.get("n_oi_lost"),
-             "oi_day_basis": oi_day_basis}
+             "oi_day_basis": oi_day_basis, "quote_source": quote_source}
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 
@@ -550,6 +595,9 @@ def main() -> int:
                          "比 CBOE 那份檔案早十幾個小時（跨週末 2.5 天）；價格仍取 CBOE")
     ap.add_argument("--occ-txt",
                     help="離線測試用：改讀存好的 series-search 純文字，不連 OCC")
+    ap.add_argument("--quote-source", choices=("auto", "cdn", "page"), default="auto",
+                    help="美股報價來源。auto ＝ 先抓 CDN 檔，停更或連不上才改抓 Cboe 報價頁（每次至多 1 次）；"
+                         "cdn ＝ 只抓 CDN 檔；page ＝ 直接抓報價頁（手動測試用）。--json 時不適用")
     args = ap.parse_args()
 
     sym = args.symbol
