@@ -208,6 +208,19 @@ def oi_as_of(payload: dict, today: str, prev_td=None) -> Optional[str]:
     return d0.strftime("%Y%m%d")
 
 
+def quote_stale(sess: str, expected: str) -> bool:
+    """這份報價是不是過期了：檔案裡的場次比日曆上最近一個已收盤的交易日還舊。
+
+    sess     ＝ last_trade_time 那天（snapshot_state 的 sess），YYYYMMDD
+    expected ＝ 日曆上最近一個已收盤的交易日（build.us_last_session），YYYYMMDD
+
+    2026/09/23 03:56 UTC 起 CDN 檔整個停更、停在 9/22 收盤；隔天 expected 已經是 9/23，
+    sess 還是 9/22——就是這個情形。sess 比 expected 新（盤中、盤前）不算過期；
+    sess 空字串不在這裡判，沿用呼叫端「找不到交易日」的處理。
+    """
+    return bool(sess) and bool(expected) and sess < expected
+
+
 def snapshot_state(payload: dict) -> dict:
     """判斷這份檔案是「盤中／盤後抓的」還是「隔天開盤前抓的」。
 

@@ -34,7 +34,7 @@ from __future__ import annotations
 import datetime as dt
 import urllib.error
 import urllib.request
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 SERIES = "https://marketdata.theocc.com/series-search?symbolType=U&symbol={sym}"
 DAILY = ("https://marketdata.theocc.com/daily-open-interest"
@@ -109,30 +109,109 @@ def fetch_oi(sym: str, timeout: int = 120) -> Dict[Key, int]:
     return parse_series(fetch_series(sym, timeout=timeout), ROOTS.get(sym, (sym,)))
 
 
-def published_for(day: str, timeout: int = 60) -> Optional[bool]:
-    """OCC 有沒有已經發布 `day`（YYYYMMDD）的未平倉？
+def fetch_daily(mdy: str, timeout: int = 60) -> str:
+    """抓 daily-open-interest 的月報原文（mdy＝MM/DD/YYYY，只有月份有作用）。例外照拋。"""
+    return _get(DAILY.format(mdy=mdy), timeout=timeout)
 
-    用 daily-open-interest 那支（只有全市場總量、22 列，很輕）當日期探針。
-    回 True / False；連不到或格式看不懂就回 None（呼叫端改用別的判斷）。
+
+def _valid_ymd(s) -> bool:
+    if not (isinstance(s, str) and len(s) == 8 and s.isdigit()):
+        return False
+    try:
+        dt.date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+    except ValueError:
+        return False
+    return True
+
+
+def report_dates(text: str) -> Optional[List[str]]:
+    """daily-open-interest 月報裡 OCC 已經發布的交易日（YYYYMMDD，由新到舊）。
+
+    端點實況（2026/09/24 實測，研究區 QUESTIONS Q-050）：`reportDate` 只決定**月份**
+    ——09/22、09/07、09/30 三個日期回傳逐位元相同的檔。內容是該月月報：
+        Daily Open Interest - September 2026
+        Date,Equity,,,Index/Other,,,Debt,,,Futures,OCC Total
+        ,Calls,Puts,Total,Calls,Puts,Total,Calls,Puts,Total,Total,
+        09/23/2026,"339,544,371",…,"631,340,212",
+        09/22/2026,…
+    每個已發布的交易日一列、新的在前；假日與還沒發布的日子沒有列；CRLF、行尾多一個逗號。
+    所以日期欄的最大值就是 OCC 最新發布的交易日。
+
+    第一欄＝第一個逗號前的字串（千分位的引號欄位都在它後面，不影響）。
+    日期列＝第一欄是合法的 MM/DD/YYYY，而且後面至少有一個非 0 的數字。
+    回傳：看得懂（有日期列、或有 Date 表頭、或有月報標題）→ list（可能是空的＝該月還沒發布任何一天）；
+    看不懂（含空字串、錯誤頁）→ None。
     """
-    try:
-        y, m, d = int(day[:4]), int(day[4:6]), int(day[6:8])
-        mdy = f"{m:02d}/{d:02d}/{y:04d}"
-    except (ValueError, IndexError, TypeError):
+    dates = set()
+    known = False
+    for ln in (text or "").split("\n"):
+        ln = ln.lstrip(chr(0xFEFF)).rstrip("\r").strip()
+        if not ln:
+            continue
+        first, sep, rest = ln.partition(",")
+        first = first.strip()
+        if len(first) >= 2 and first[0] == '"' and first[-1] == '"':
+            first = first[1:-1].strip()
+        low = first.lower()
+        if low == "date" or low.startswith("daily open interest"):
+            known = True
+            continue
+        if not (len(first) == 10 and first[2] == "/" and first[5] == "/"
+                and (first[:2] + first[3:5] + first[6:]).isdigit()):
+            continue
+        ymd = first[6:] + first[:2] + first[3:5]
+        if not _valid_ymd(ymd) or not any(ch in "123456789" for ch in rest):
+            continue
+        dates.add(ymd)
+        known = True
+    if not known:
         return None
-    try:
-        txt = _get(DAILY.format(mdy=mdy), timeout=timeout)
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
-        return None
-    body = txt.strip()
-    if not body:
-        return False
-    # 有資料時是一份 CSV，列數不多但一定有數字；沒發布時 OCC 回的是空的或只有表頭
-    rows = [ln for ln in body.split("\n") if ln.strip()]
-    if len(rows) < 2:
-        return False
-    digits = sum(ch.isdigit() for ln in rows[1:] for ch in ln)
-    return digits > 0
+    return sorted(dates, reverse=True)
+
+
+def latest_published(price_day: str, until: str,
+                     fetch: Optional[Callable[[str], str]] = None) -> Tuple[Optional[str], str]:
+    """OCC 最新已發布的交易日：回 (日期, 狀態)，狀態是 ok／not_yet／unknown。
+
+    price_day ＝ 這一班價格的日期；until ＝ 美東今天（build._et_today），OCC 不會發布更晚的日子。
+    先抓上界那個月的月報；那個月看得懂但一天都還沒有（月初、OCC 還沒發布本月第一天）
+    才改抓上個月。抓不到或看不懂一律回 unknown、不退回上個月——那不等於「本月沒資料」，
+    退回去可能把比較舊的日子當成最新。每次至多抓 2 次；不讀假日檔，日曆錯也量得對。
+      最新日 > 上界        → (None, "unknown")   月報比美東今天還新＝時鐘或報表異常
+      最新日 < price_day   → (最新日, "not_yet") OCC 還沒發布這一班價格那天
+      其餘                → (最新日, "ok")      比 price_day 新的由呼叫端的對齊檢查擋下
+    fetch 只給測試注入用（參數是 MM/01/YYYY，回傳月報文字）。
+    """
+    if fetch is None:
+        fetch = fetch_daily
+    if not (_valid_ymd(price_day) and _valid_ymd(until)):
+        return None, "unknown"
+    hi = max(price_day, until)
+
+    def _month(y: int, m: int) -> Optional[List[str]]:
+        try:
+            txt = fetch(f"{m:02d}/01/{y:04d}")
+        except Exception:                                   # noqa: BLE001
+            return None
+        if not isinstance(txt, str):
+            return None
+        return report_dates(txt)
+
+    y, m = int(hi[:4]), int(hi[4:6])
+    dates = _month(y, m)
+    if dates is None:
+        return None, "unknown"
+    if not dates:
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+        dates = _month(y, m)
+        if not dates:
+            return None, "unknown"
+    last = max(dates)
+    if last > hi:
+        return None, "unknown"
+    if last < price_day:
+        return last, "not_yet"
+    return last, "ok"
 
 
 def same_numbers(occ: Dict[Key, int], cbo: Dict[Key, int]) -> bool:
