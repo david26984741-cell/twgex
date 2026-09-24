@@ -861,6 +861,150 @@ def occ_tests():
           "2026/08/28 是週五，下一個交易日是 08/31")
 
 
+def us_stall_tests():
+    """2026/09/23 Cboe CDN 停更暴露的漏洞：兩道新防線。
+
+    一、Cboe 報價是不是過期了——照日曆判定（build.us_last_session、cboe.quote_stale）。
+    二、OCC 未平倉是哪一天的——直接讀 OCC 月報的日期欄（occ.report_dates、occ.latest_published），
+        不再用「CBOE 檔的未平倉日＋1」推。9/24 那幾班就是推錯，把 9/22 的報價配上 9/23 的未平倉標成 9/22。
+    全部不連網：OCC 月報一律由注入的 fetch= 字典函式提供，並記下被呼叫的順序。
+    """
+    import build
+    import cboe as _cboe
+    import occ
+
+    hol = engine.load_holidays(os.path.join(os.path.dirname(os.path.abspath(__file__)), "calendar_us.txt"))
+    U = dt.datetime
+
+    # --- 日曆上最近一個已收盤的交易日（UTC−5 近似美東） ---
+    for now, want, why in (
+            (U(2026, 9, 24, 12, 43), "20260923", "本事件：9/24 那幾班應該要做 9/23"),
+            (U(2026, 9, 23, 13, 32), "20260922", "9/23 晚上那次做 9/22 是對的"),
+            (U(2026, 9, 28, 4, 30), "20260925", "週一台北中午＝美東週日晚上，最近一場是週五"),
+            (U(2026, 9, 8, 4, 30), "20260904", "9/7 勞動節休市，要跳回 9/4"),
+            (U(2026, 9, 24, 22, 30), "20260924", "美東 17:30 之後，當天就算已收盤"),
+            (U(2026, 9, 26, 4, 30), "20260925", "週六台北中午＝美東週五晚上")):
+        got = build.us_last_session(hol, now)
+        check(f"美股最近已收盤交易日：{now:%m/%d %H:%M} UTC → {want}", got == want, f"{why}；得到 {got}")
+
+    check("美東今天：09/25 04:30 UTC 還是 09/24", build._et_today(U(2026, 9, 25, 4, 30)) == "20260924")
+    check("美東今天：09/25 05:00 UTC 換成 09/25", build._et_today(U(2026, 9, 25, 5, 0)) == "20260925")
+
+    # --- Cboe 報價過期（照日曆） ---
+    check("報價過期：檔案停在 9/22、日曆已是 9/23 → 過期", _cboe.quote_stale("20260922", "20260923") is True,
+          "9/24 那四班就是這樣，要擋")
+    check("報價過期：同一天 → 不算過期", _cboe.quote_stale("20260922", "20260922") is False,
+          "9/23 晚上那次是對的，不能誤擋")
+    check("報價過期：檔案比日曆新（盤中、盤前）→ 不算過期", _cboe.quote_stale("20260924", "20260923") is False)
+    check("報價過期：沒有場次日期時不在這裡判", _cboe.quote_stale("", "20260923") is False,
+          "交給既有的「找不到交易日」處理")
+
+    # --- OCC 月報（合成；格式照 2026/09/24 的原文，數字自編） ---
+    def M(label, dates):
+        rows = [f"Daily Open Interest - {label}",
+                "Date,Equity,,,Index/Other,,,Debt,,,Futures,OCC Total",
+                ",Calls,Puts,Total,Calls,Puts,Total,Calls,Puts,Total,Total,"]
+        for i, d in enumerate(dates):
+            nums = ",".join(f'"{1000000 + 1234 * (i + 1) + 7 * j:,}"' for j in range(11))
+            rows.append(f"{d},{nums},")
+        return "\r\n".join(rows) + "\r\n"
+
+    sep23 = ["09/23/2026", "09/22/2026", "09/21/2026", "09/18/2026", "09/17/2026", "09/16/2026",
+             "09/15/2026", "09/14/2026", "09/11/2026", "09/10/2026", "09/09/2026", "09/08/2026",
+             "09/04/2026", "09/03/2026", "09/02/2026", "09/01/2026"]      # 跟真實月報同一組日期：沒有 09/07
+    SEP23 = M("September 2026", sep23)
+    SEP30 = M("September 2026", ["09/30/2026", "09/29/2026", "09/28/2026", "09/25/2026", "09/24/2026"] + sep23)
+    SEP04 = M("September 2026", ["09/04/2026", "09/03/2026", "09/02/2026", "09/01/2026"])
+    SEP0 = M("September 2026", [])
+    OCT0 = M("October 2026", [])
+    JAN0 = M("January 2027", [])
+    DEC31 = M("December 2026", ["12/31/2026", "12/30/2026", "12/29/2026", "12/28/2026", "12/24/2026"])
+    HTML = "<html><body>Service Unavailable</body></html>"
+    ymd = lambda s: s[6:] + s[:2] + s[3:5]
+    want_sep23 = [ymd(s) for s in sep23]
+
+    def F(table):
+        """字典當月報來源：值是字串就回傳、是例外就丟；沒有這個鍵就丟 OSError。順便記下被叫的順序。"""
+        calls = []
+
+        def fetch(mdy):
+            calls.append(mdy)
+            if mdy not in table:
+                raise OSError(f"沒有 {mdy}")
+            v = table[mdy]
+            if isinstance(v, BaseException):
+                raise v
+            return v
+        return fetch, calls
+
+    check("月報 r1：讀出 16 個日期、新的在前、沒有勞動節",
+          occ.report_dates(SEP23) == want_sep23, str(occ.report_dates(SEP23)[:3]))
+    lf_quoted = "\n".join((f'"{ln[:10]}"{ln[10:]}' if ln[:2].isdigit() else ln)
+                          for ln in SEP23.replace("\r\n", "\n").split("\n"))
+    check("月報 r2：只有 \\n 換行、日期加了引號也讀得對", occ.report_dates(lf_quoted) == want_sep23)
+    check("月報 r3：本月一天都還沒發布 → 空清單（看得懂、只是還沒有）", occ.report_dates(OCT0) == [])
+    check("月報 r4：空字串與錯誤頁都是「看不懂」→ None",
+          occ.report_dates("") is None and occ.report_dates(HTML) is None)
+    odd = SEP0 + "\r\n".join([
+        "09/24/2026,,,,,,,,,,,",
+        "09/25/2026," + ",".join(['"0"'] * 11) + ",",
+        '13/45/2026,"1,234,567",',
+        '09/23/2026,"1,234,567",']) + "\r\n"
+    check("月報 r5：數字全空或全 0 的列、不合法的日期都不算", occ.report_dates(odd) == ["20260923"],
+          str(occ.report_dates(odd)))
+
+    D09, D10 = "09/01/2026", "10/01/2026"
+    cases = (
+        ("p1 本事件：價格 9/22、OCC 已到 9/23", "20260922", "20260924", {D09: SEP23},
+         ("20260923", "ok"), [D09]),
+        ("p2 正常早班", "20260923", "20260924", {D09: SEP23}, ("20260923", "ok"), [D09]),
+        ("p3 美東晚間", "20260923", "20260923", {D09: SEP23}, ("20260923", "ok"), [D09]),
+        ("p4 OCC 還沒發布價格那天", "20260924", "20260924", {D09: SEP23}, ("20260923", "not_yet"), [D09]),
+        ("p5 本月一天都還沒有 → 改抓上個月", "20260930", "20261001", {D10: OCT0, D09: SEP30},
+         ("20260930", "ok"), [D10, D09]),
+        ("p6 端點回了別的月份的內容 → 照讀、不退回", "20260930", "20261001", {D10: SEP30},
+         ("20260930", "ok"), [D10]),
+        ("p7 跨年", "20261231", "20270104", {"01/01/2027": JAN0, "12/01/2026": DEC31},
+         ("20261231", "ok"), ["01/01/2027", "12/01/2026"]),
+        ("p8 兩個月都還沒有 → 無法確認", "20260930", "20261001", {D10: OCT0, D09: SEP0},
+         (None, "unknown"), [D10, D09]),
+        ("p9 上個月抓不到 → 無法確認", "20260930", "20261001", {D10: OCT0, D09: OSError()},
+         (None, "unknown"), [D10, D09]),
+        ("p10 第一次就抓不到 → 無法確認、不退回上個月", "20260930", "20261001", {D10: OSError(), D09: SEP30},
+         (None, "unknown"), [D10]),
+        ("p11 看不懂（錯誤頁）→ 無法確認、不退回上個月", "20260930", "20261001", {D10: HTML, D09: SEP30},
+         (None, "unknown"), [D10]),
+        ("p12 上界在未來", "20260923", "20260930", {D09: SEP23}, ("20260923", "ok"), [D09]),
+        ("p13 上界是假日", "20260904", "20260907", {D09: SEP04}, ("20260904", "ok"), [D09]),
+        ("p14 假日後 OCC 還沒發布", "20260908", "20260908", {D09: SEP04}, ("20260904", "not_yet"), [D09]),
+        ("p15 月報比美東今天還新 → 無法確認", "20260922", "20260922", {D09: SEP23}, (None, "unknown"), [D09]),
+        ("p16 上界早於價格日（時鐘誤差）→ 以價格日為上界", "20260923", "20260922", {D09: SEP23},
+         ("20260923", "ok"), [D09]),
+    )
+    for name, pday, until, table, want, want_calls in cases:
+        fetch, calls = F(table)
+        got = occ.latest_published(pday, until, fetch=fetch)
+        check(f"OCC 月報日期 {name}", got == want and calls == want_calls,
+              f"得到 {got}、呼叫 {calls}")
+    fetch, calls = F({D09: SEP23})
+    bad = [occ.latest_published(p, u, fetch=fetch)
+           for p, u in (("", "20260924"), ("20260923", "2026092"), ("20260231", "20260924"))]
+    check("OCC 月報日期 p17 輸入不合法 → 無法確認、完全不抓",
+          bad == [(None, "unknown")] * 3 and calls == [], f"得到 {bad}、呼叫 {calls}")
+
+    # --- OCC 逐序列跟月報的說法矛盾 ---
+    check("矛盾：逐檔跟 CBOE 一樣、月報卻說已經是下一天 → 擋",
+          build._occ_contradiction(True, "20260922", "20260923") is True)
+    check("矛盾：逐檔一樣、日期也一樣（CBOE 已經跟上）→ 不擋",
+          build._occ_contradiction(True, "20260923", "20260923") is False)
+    check("矛盾：量不到 CBOE 的日期（SPX）→ 不擋",
+          build._occ_contradiction(True, None, "20260923") is False)
+    check("矛盾：逐檔本來就不一樣 → 不擋",
+          build._occ_contradiction(False, "20260921", "20260923") is False)
+
+    check("結束碼 3＝來源停更（daily.yml 遇到它不重試）", build.EXIT_STALE == 3)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
@@ -875,6 +1019,8 @@ def main():
     oi_delta_tests()
     print()
     occ_tests()
+    print()
+    us_stall_tests()
     if a.csv:
         print()
         data_tests(a.csv, a.date)

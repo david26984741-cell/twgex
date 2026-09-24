@@ -89,8 +89,9 @@ jobs:
         run: python wait_oi.py --minutes 150 --every 5
 
       - name: 產生資料
+        id: gen
         run: |
-          fail=0
+          FAILED=""
           OIARG=""
           # 注意：這裡不能寫成 `[ ... ] && OIARG=...`——Actions 的 shell 帶 -e，
           # 條件不成立時整串回傳 1，整個步驟會當場失敗。
@@ -111,21 +112,23 @@ jobs:
             # 所以這裡重試是安全的：三次、每次隔 5 分鐘。
             ok=0
             for attempt in 1 2 3; do
-              if python build.py --symbol "$s" $A; then ok=1; break; fi
+              if python build.py --symbol "$s" $A; then ok=1; break; else rc=$?; fi
+              if [ "$rc" = "3" ]; then
+                echo "::warning::$s 來源停更（結束碼 3），重試沒有用，直接跳過"
+                break
+              fi
               if [ "$attempt" != "3" ]; then
-                echo "第 $attempt 次沒成功，等 5 分鐘再試（來源可能還沒上架）"
+                echo "第 $attempt 次沒成功（結束碼 $rc），等 5 分鐘再試（來源可能還沒上架）"
                 sleep 300
               fi
             done
             if [ "$ok" != "1" ]; then
-              echo "::warning::$s 更新失敗（來源可能還沒上架，下一班會再補）"
-              fail=1
+              echo "::warning::$s 這一班沒更新（原因見 Summary）"
+              FAILED="$FAILED $s"
             fi
             echo "::endgroup::"
           done
-          if [ "$fail" = "1" ] && [ -z "$(git status --porcelain -- data/)" ]; then
-            echo "::error::全部標的都失敗且沒有任何資料變動"; exit 1
-          fi
+          echo "failed=${FAILED# }" >> "$GITHUB_OUTPUT"
 
       # 平行觀察期：OCC 的逐履約價未平倉在交易日當天傍晚就有，CBOE 要隔天早上。
       # 這一步只讀不寫、也不會讓工作失敗，純粹每天記一份逐檔對照，
@@ -163,3 +166,9 @@ jobs:
             sleep 5
           done
           echo "::error::推送連續失敗三次"; exit 1
+
+      - name: 有標的沒更新就讓這一班失敗（提交已完成，其他標的不受影響）
+        if: steps.gen.outputs.failed != ''
+        run: |
+          echo "::error::這一班沒更新：${{ steps.gen.outputs.failed }}（原因見本頁 Summary）"
+          exit 1

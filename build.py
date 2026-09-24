@@ -15,6 +15,12 @@
 輸出的是「積木」不是成品數字: 每個履約價分別給買權/賣權的 gamma / vanna / vega 項，
 情境曲線同樣分量輸出，網頁端才組成：
   GEX  = sg.c*gc + sg.p*gp        VEX = sg.c*wc + sg.p*wp        GEX+ = GEX + beta*VEX
+
+結束碼（daily.yml 依此決定要不要重試）：
+  0  成功
+  1  一般失敗，重試可能有用（例如 OCC 還沒發布、連線失敗）
+  2  參數錯誤（argparse）
+  3  來源停更：Cboe 報價照日曆已經過期，或量到 OCC 的未平倉已經比 Cboe 報價新——重試沒有用
 """
 from __future__ import annotations
 
@@ -37,6 +43,23 @@ CURVE_N = 241
 CURVE_SPAN = 0.12
 MIN_REF_OI = 500
 MAX_REF_SPREAD = 0.005
+
+# 來源停更（見模組 docstring 的結束碼）。daily.yml 遇到它不重試——停更不會在五分鐘內自己好。
+EXIT_STALE = 3
+
+
+def _stop(msg: str, code: int = 1):
+    """印出原因後以指定結束碼結束。
+
+    在 GitHub Actions 上另把第一行寫進 Step Summary（第一行以「標的: 」開頭），
+    該班變紅時點進去就看得到是哪一檔、為什麼沒更新，不用翻整份日誌。
+    """
+    print("  " + msg, file=sys.stderr)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write("- " + msg.split("\n", 1)[0] + "\n")
+    sys.exit(code)
 
 
 def pick_reference_forward(live, diag, forwards):
@@ -165,19 +188,37 @@ def load_tw(args):
     return day, chain, prev_oi, spot, (prior[-1] if prior else None), extra
 
 
-def us_last_session(holidays) -> str:
+def us_last_session(holidays, now_utc=None) -> str:
     """美東「現在」之前最近的一個已收盤交易日（YYYYMMDD）。
 
     排程放在美東早上（開盤前）跑，此時 CBOE 的報價與 OCC 的未平倉量
     指的都是前一個交易日的收盤，所以直接用日曆推，不看 last_trade_time。
     """
-    et = dt.datetime.utcnow() - dt.timedelta(hours=5)      # 約當美東（夏令時差 1 小時，不影響判斷日期）
+    et = (now_utc or dt.datetime.utcnow()) - dt.timedelta(hours=5)      # 約當美東（夏令時差 1 小時，不影響判斷日期）
     d = et.date()
     if et.hour >= 17:            # 已經過了當天收盤且結算完，當天就是最後一個 session
         while d.weekday() >= 5 or d in holidays:
             d = engine.prev_trading_day(d, holidays)
         return d.strftime("%Y%m%d")
     return engine.prev_trading_day(d, holidays).strftime("%Y%m%d")
+
+
+def _et_today(now_utc=None) -> str:
+    """美東的「今天」（YYYYMMDD），與 us_last_session 同一個近似（UTC−5）。
+
+    OCC 不會發布晚於美東今天的日子，所以拿它當 occ.latest_published 的上界。
+    """
+    return ((now_utc or dt.datetime.utcnow()) - dt.timedelta(hours=5)).strftime("%Y%m%d")
+
+
+def _occ_contradiction(same, cboe_oi_day, oi_day) -> bool:
+    """OCC 逐序列資料跟 CBOE 檔逐檔相同，OCC 月報卻說是另一天——兩個說法互相矛盾。
+
+    OCC 兩個端點若更新不同步（月報已經是 D、逐序列還是 D−1），逐序列就會跟 CBOE 檔一模一樣。
+    舊寫法靠「相同 → 日期改取 CBOE 的推論」擋掉這種情形；日期改成直接量測之後，用這一條保留同樣的保護。
+    正常的「相同」（CBOE 已經吃進同一天）兩個日期相等，不會誤擋。
+    """
+    return bool(same and cboe_oi_day and oi_day and cboe_oi_day != oi_day)
 
 
 def load_us(args, sym):
@@ -196,6 +237,22 @@ def load_us(args, sym):
     use_prev = not args.live_price
     st = cboe.snapshot_state(payload)
     sess = st["sess"]
+
+    # ── Cboe 報價是不是過期了：照日曆判定，不連網 ──────────────────────────────
+    # 2026/09/23 03:56 UTC 起 CDN 檔整個停更、停在 9/22 收盤，9/24 那幾班照樣產出，
+    # 把 9/22 的報價配上 OCC 9/23 的未平倉、標成 9/22。日曆上最近一個已收盤的交易日
+    # 比檔案裡的場次還新，就是檔案停更了——重試沒有用，以結束碼 3 收場。
+    expected = args.date or us_last_session(hol)
+    if cboe.quote_stale(sess, expected):
+        msg = (f"{sym}: Cboe 報價停在 {fmt_date(sess)}，"
+               f"照日曆最近一個已收盤的交易日是 {fmt_date(expected)}，不產出。\n"
+               f"    檔案時間 {payload.get('timestamp') or '不明'}（UTC）。來源停更，重試沒有用，"
+               f"等 Cboe 恢復或下一班再看。\n"
+               f"    離線重跑舊檔請加 --date；要強行產出請加 --allow-stale-oi。")
+        if not args.allow_stale_oi:
+            _stop(msg, EXIT_STALE)
+        print("  警告：" + msg, file=sys.stderr)
+
     price_day = sess
     if use_prev and sess:
         y, m, dd = int(sess[:4]), int(sess[4:6]), int(sess[6:8])
@@ -250,6 +307,7 @@ def load_us(args, sym):
     # 就發布逐序列未平倉，CBOE 要**隔天早上**（美東 10:00~10:30）才吃進去。
     oi_override = None
     oi_day = cboe_oi_day
+    oi_day_basis = "cboe_inferred"
     occ_note = None
     if getattr(args, "oi_source", "cboe") == "occ":
         import occ as occ_src
@@ -267,34 +325,46 @@ def load_us(args, sym):
             except Exception as _e:                              # noqa: BLE001
                 sample = f"（連原始內容都拿不到：{type(_e).__name__}: {_e}）"
             raise SystemExit(f"  {sym}: OCC 沒回傳任何可用序列，先不要產出。\n{sample}")
-        # 這批 OCC 是哪一個交易日的？OCC 自己沒有日期欄位，用兩道獨立的判斷夾出來。
+        # 這批 OCC 是哪一個交易日的？直接問 OCC（月報的日期欄），不再用 CBOE 檔推。
         #
-        # 危險的只有一個時段：美東當天 16:00~20:00（收盤了、OCC 還沒發布）。
-        # 那時 prev_day_close 已經滾成當天收盤（price_day = 今天），
-        # 但 OCC 還停在昨天——正好是我們最怕的拼裝圖。
-        probe = (None if getattr(args, "occ_txt", None)
-                 else occ_src.published_for(price_day))
-        same = occ_src.same_numbers(oi_override, occ_src.cboe_oi_map(payload))
-        if probe is False:
-            msg = (f"{sym}: OCC 還沒發布 {price_day} 的未平倉（美東當天 20:00 左右才會有）。\n"
-                   f"    現在拿到的是前一個交易日的，配上 {price_day} 的價格會變成拼裝圖。")
-            if not args.allow_stale_oi:
-                raise SystemExit("  " + msg)
-            print("  警告：" + msg, file=sys.stderr)
-        if same:
-            # OCC 跟 CBOE 逐檔一模一樣 → OCC 還沒往前走，兩邊是同一天。
-            # 此時 OCC 沒有任何好處，日期就以 CBOE 自己的判斷為準，交給下面的對齊檢查去擋。
-            oi_day = cboe_oi_day
-            occ_note = (f"{sym}: OCC 與 CBOE 的未平倉在共同合約上逐檔完全相同，"
-                        f"這一輪沒有比 CBOE 提前（可能是 CBOE 已經跟上，"
-                        f"也可能是 OCC 當天還沒發布）；日期以 CBOE 的判斷為準。")
+        # 舊寫法是「CBOE 檔的未平倉日＋1 個交易日」（SPX 測不出就直接等於價格日），前提是 CBOE
+        # 只落後一個發布週期。2026/09/23 起 CBOE 停更超過一天，前提失效，9/22 的報價配上 9/23 的
+        # 未平倉照樣被標成 9/22。另一個危險時段仍是美東當天 16:00~20:00（收盤了、OCC 還沒發布）：
+        # 那時 prev_day_close 已經滾成當天收盤，OCC 還停在昨天——月報的最新日期會比價格日舊，在這裡擋掉。
+        if getattr(args, "occ_txt", None):
+            if not args.date:
+                _stop(f"{sym}: --occ-txt 必須搭配 --date（離線檔量不到 OCC 的日期）", 1)
+            oi_day, oi_day_basis = args.date, "cli_date"
         else:
-            # 不一樣 → OCC 比 CBOE 新一個發布週期。CBOE 的未平倉日期若測得出來，
-            # OCC 就是它的下一個交易日；測不出來（SPX 不留已到期序列）才退回 price_day。
-            oi_day = (occ_src.next_trading_day(cboe_oi_day, hol)
-                      if cboe_oi_day else price_day)
-            occ_note = (f"{sym}: 未平倉改用 OCC（{len(oi_override):,} 個序列）"
-                        f"；CBOE 那份還停在 {cboe_oi_day or '不明'}，OCC 已經是 {oi_day}。")
+            occ_day, status = occ_src.latest_published(price_day, _et_today())
+            if status == "ok":
+                oi_day, oi_day_basis = occ_day, "occ_probe"
+            else:
+                if status == "not_yet":
+                    msg = (f"{sym}: OCC 還沒發布 {price_day} 的未平倉（美東當天 20:00 左右才會有），"
+                           f"目前最新的是 {occ_day}。\n"
+                           f"    現在拿到的是前一個交易日的，配上 {price_day} 的價格會變成拼裝圖。")
+                else:
+                    msg = (f"{sym}: 無法確認 OCC 未平倉的日期（OCC 月報抓不到或看不懂），先不要產出。\n"
+                           f"    等下一班再跑即可。")
+                if not args.allow_stale_oi:
+                    _stop(msg, 1)
+                print("  警告：" + msg, file=sys.stderr)
+                oi_day, oi_day_basis = price_day, "forced"
+        same = occ_src.same_numbers(oi_override, occ_src.cboe_oi_map(payload))
+        if same:
+            occ_note = (f"{sym}: OCC 與 CBOE 的未平倉在共同合約上逐檔完全相同"
+                        f"（CBOE 已經跟上同一天；不影響日期判定）。")
+        else:
+            occ_note = (f"{sym}: 未平倉改用 OCC（{len(oi_override):,} 個序列），"
+                        f"與 CBOE 檔內未平倉不同（不影響日期判定）；OCC 的日期是 {oi_day}。")
+        if _occ_contradiction(same, cboe_oi_day, oi_day):
+            msg = (f"{sym}: OCC 逐序列資料與日期探針不一致：逐檔跟 CBOE 檔（{cboe_oi_day}）完全相同，"
+                   f"月報卻說 OCC 已經是 {oi_day}。\n"
+                   f"    多半是 OCC 兩個端點更新不同步；等下一班再跑即可。要強行產出請加 --allow-stale-oi。")
+            if not args.allow_stale_oi:
+                _stop(msg, 1)
+            print("  警告：" + msg, file=sys.stderr)
     if occ_note:
         print("  " + occ_note, file=sys.stderr)
 
@@ -321,16 +391,21 @@ def load_us(args, sym):
 
     # 對齊檢查：未平倉與價格必須是同一個交易日，不然畫出來的是拼裝圖
     if oi_day and price_day and oi_day != price_day:
-        why = ("這通常表示抓得太早：OCC 在交易日當天傍晚（美東約 20:00）就發布未平倉，"
-               "CBOE 這份檔案要隔天早上才吃進去。"
-               if oi_override is None else
-               "OCC 的未平倉比 CBOE 的價格新。正常情況不會發生，"
-               "多半是 CBOE 那份檔案停更或 prev_day_close 還沒滾。")
-        msg = (f"{sym}: 未平倉量是 {oi_day} 收盤、價格是 {price_day} 收盤，兩者不同日。\n"
-               f"    {why}\n"
-               f"    等兩邊對齊後再跑一次即可；要強行產出請加 --allow-stale-oi。")
+        if oi_override is None:
+            msg = (f"{sym}: 未平倉量是 {oi_day} 收盤、價格是 {price_day} 收盤，兩者不同日。\n"
+                   f"    這通常表示抓得太早：OCC 在交易日當天傍晚（美東約 20:00）就發布未平倉，"
+                   f"CBOE 這份檔案要隔天早上才吃進去。\n"
+                   f"    等兩邊對齊後再跑一次即可；要強行產出請加 --allow-stale-oi。")
+            code = 1
+        else:
+            # OCC 路徑走到這裡只剩「OCC 比價格新」：OCC 落後的情形上面已經擋掉。
+            # 這正是 2026/09/24 的情形——重試沒有用，要等 Cboe 的報價跟上。
+            msg = (f"{sym}: OCC 的未平倉已經是 {oi_day}，Cboe 報價還停在 {price_day}，兩者不同日。\n"
+                   f"    多半是 Cboe 那份檔案停更或 prev_day_close 還沒滾；重試沒有用，等 Cboe 跟上。\n"
+                   f"    要強行產出請加 --allow-stale-oi。")
+            code = EXIT_STALE
         if not args.allow_stale_oi:
-            raise SystemExit("  " + msg)
+            _stop(msg, code)
         print("  警告：" + msg, file=sys.stderr)
     if oi_day is None:
         print(f"  註：{sym} 的檔案不保留已到期序列，無法從資料反推未平倉日期，"
@@ -355,7 +430,8 @@ def load_us(args, sym):
              "price_basis": meta.get("price_basis"), "session_day": fmt_date(sess),
              "fwd_check": meta.get("fwd_check"), "n_no_price": meta.get("n_no_price"),
              "oi_as_of": fmt_date(oi_day or price_day), "price_as_of": fmt_date(price_day),
-             "oi_source": meta.get("oi_source"), "n_oi_lost": meta.get("n_oi_lost")}
+             "oi_source": meta.get("oi_source"), "n_oi_lost": meta.get("n_oi_lost"),
+             "oi_day_basis": oi_day_basis}
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 
@@ -459,7 +535,9 @@ def main() -> int:
     ap.add_argument("--symbol", default="TXO",
                     choices=[s for s in symcfg.SPECS
                              if not symcfg.SPECS[s].get("derived_from")])
-    ap.add_argument("--csv"); ap.add_argument("--fut-csv"); ap.add_argument("--json")
+    ap.add_argument("--csv"); ap.add_argument("--fut-csv")
+    ap.add_argument("--json",
+                    help="離線讀存好的 CBOE 檔；重跑舊檔必須加 --date，否則會被當天日曆判成過期（結束碼 3）")
     ap.add_argument("--date"); ap.add_argument("--spot", type=float)
     ap.add_argument("--spot-file")
     ap.add_argument("--days-back", type=int, default=9)
