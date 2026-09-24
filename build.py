@@ -221,6 +221,29 @@ def _occ_contradiction(same, cboe_oi_day, oi_day) -> bool:
     return bool(same and cboe_oi_day and oi_day and cboe_oi_day != oi_day)
 
 
+def _session_price_field(pick, st, use_prev, tol):
+    """選擇權報價欄位的場次限制：價格日不是買賣中價所屬的場次時，只准用 prev_close。
+
+    買賣中價屬於 last_trade_time 那個場次（開盤後＝即時價、收盤後＝該場次收盤價），
+    而 load_us 在 rolled 為假時把價格日定為前一交易日——這時中價跟價格日必定不同場次。
+    cboe.pick_price_field「兩個都算、挑近的」只在指數偏離前收時才碰巧選對：
+    2026/09/24 Run #88（美東 13:58 盤中）SPX 剛好接近前一日收盤，選了盤中中價，
+    做出「9/24 盤中報價＋9/23 未平倉」標成 9/23 的圖，G1、G2 與對齊檢查都擋不到。
+    條件＝use_prev 且場次已開盤且沒有換日。台北早班（收盤後已換日，必須用 mid）與
+    新場次還沒開盤（中價仍是前一場次的收盤）都不受影響。
+    回傳 (欄位, 是否受限)；受限時 prev_close 不可用就回 (None, True)，由呼叫端擋下。
+    n_pairs ≥ 5 與 pick_price_field「樣本太少不採信」同一個門檻。
+    """
+    blocked = bool(use_prev and st.get("opened") and not st.get("rolled"))
+    if not blocked:
+        return pick.get("field"), False
+    c = (pick.get("candidates") or {}).get("prev_close") or {}
+    rel = c.get("rel")
+    ok = (c.get("fwd") is not None and (c.get("n_pairs") or 0) >= 5
+          and rel is not None and abs(rel) <= tol)
+    return ("prev_close" if ok else None), True
+
+
 def _page_payload(sym, cboe_sym):
     """抓 Cboe 報價頁並取出內嵌資料（備援來源）。
 
@@ -327,7 +350,29 @@ def load_us(args, sym):
                  f"買賣中價→遠期 {_fmt(pick['candidates']['mid'])}"
                  f" → 採用 {price_field or '（都不可信）'}")
     print("  " + pick_line, file=sys.stderr)
-    if price_field is None or abs(pick["rel"]) > cboe.FWD_TOL:
+    # 價格日不是買賣中價所屬的場次（盤中、或收盤後 prev_day_close 還沒換日）時只准用 prev_close。
+    # 2026/09/24 Run #88 在美股盤中執行，SPX 剛好接近前收，選了盤中中價；見 _session_price_field。
+    guarded, mid_blocked = _session_price_field(pick, st, use_prev, cboe.FWD_TOL)
+    if mid_blocked:
+        _pc = pick["candidates"]["prev_close"]
+        if guarded == "prev_close":
+            if price_field != "prev_close":
+                print(f"  註：{sym}: 場次 {fmt_date(sess)} 已開盤、價格日是 {fmt_date(price_day)}，"
+                      f"買賣中價屬於別的場次，不採用，改用 prev_close。", file=sys.stderr)
+                pick.update(field="prev_close", fwd=_pc["fwd"], rel=_pc["rel"], n_pairs=_pc["n_pairs"])
+                price_field = "prev_close"
+        else:
+            msg = (f"{sym}: 場次 {fmt_date(sess)} 已開盤、價格日是 {fmt_date(price_day)}，只能用 prev_close，"
+                   f"但 prev_close 反解的遠期對不上現貨，不產出。\n"
+                   f"    {pick_line}\n"
+                   f"    容忍值 {cboe.FWD_TOL*100:.2f}%。等美股收盤、prev_day_close 換日後的下一班再跑即可；"
+                   f"要強行產出請加 --allow-stale-oi。")
+            if not args.allow_stale_oi:
+                _stop(msg, 1)
+            print("  警告：" + msg, file=sys.stderr)
+            pick.update(field="prev_close", fwd=_pc["fwd"], rel=_pc["rel"], n_pairs=_pc["n_pairs"])
+            price_field = "prev_close"
+    if not mid_blocked and (price_field is None or abs(pick["rel"]) > cboe.FWD_TOL):
         msg = (f"{sym}: 兩個價格欄位反解出來的遠期都對不上現貨，不產出。\n"
                f"    {pick_line}\n"
                f"    容忍值 {cboe.FWD_TOL*100:.2f}%。這通常表示 CBOE 那份檔案停更、\n"
@@ -476,7 +521,8 @@ def load_us(args, sym):
              "fwd_check": meta.get("fwd_check"), "n_no_price": meta.get("n_no_price"),
              "oi_as_of": fmt_date(oi_day or price_day), "price_as_of": fmt_date(price_day),
              "oi_source": meta.get("oi_source"), "n_oi_lost": meta.get("n_oi_lost"),
-             "oi_day_basis": oi_day_basis, "quote_source": quote_source}
+             "oi_day_basis": oi_day_basis, "quote_source": quote_source,
+             "mid_allowed": not mid_blocked}
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 

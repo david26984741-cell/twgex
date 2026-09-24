@@ -206,6 +206,9 @@ def pick_price_field(payload: dict, spot: float,
     連續兩天，SPY / QQQ / SPX 都成立），所以正解不是換排程，而是：
     兩個欄位都用 parity 算一次遠期，挑貼現貨的那個。這個判準在任何時點都成立——
     盤中的中價是即時價，反而會偏離「前一收盤」的現貨，那時自然就選回 prev_close。
+    例外（2026/09/24 Run #88 踩到）：指數盤中剛好接近前一日收盤時，即時中價反而比較近，
+    會被選中而混進前一日的圖。所以 build.load_us 在「場次已開盤、價格日不是這個場次」時
+    只准用 prev_close（build._session_price_field）；本函式的判準不變。
     """
     out = {"spot": spot, "candidates": {}, "field": None, "fwd": None,
            "rel": None, "n_pairs": 0}
