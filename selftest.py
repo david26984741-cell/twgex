@@ -1005,6 +1005,114 @@ def us_stall_tests():
     check("結束碼 3＝來源停更（daily.yml 遇到它不重試）", build.EXIT_STALE == 3)
 
 
+def quote_page_tests():
+    """CDN 檔停更時的備援：Cboe 報價頁內嵌的 CTX.contextOptionsData。
+
+    頁面的 timestamp 只有時分秒（UTC），要補上日期才能交給 snapshot_state 判斷換日；
+    資料用 raw_decode 從標記後第一個「{」解一個物件就停。全部用假 HTML，不連網。
+    """
+    import json
+    import cboe as _cboe
+    U = dt.datetime
+
+    check("報價頁時間：補上抓檔當天的日期",
+          _cboe.complete_timestamp("15:19:21", U(2026, 9, 24, 15, 19, 44)) == "2026-09-24 15:19:21",
+          "2026/09/24 實際存檔的那一份")
+    check("報價頁時間：比抓檔時刻還晚＝跨過 UTC 午夜前的那份，日期往前一天",
+          _cboe.complete_timestamp("23:59:50", U(2026, 9, 25, 0, 0, 5)) == "2026-09-24 23:59:50")
+    check("報價頁時間：剛過午夜的那份維持當天",
+          _cboe.complete_timestamp("00:00:03", U(2026, 9, 25, 0, 0, 5)) == "2026-09-25 00:00:03")
+    check("報價頁時間：已經是完整格式就原樣",
+          _cboe.complete_timestamp("2026-09-23 03:56:05", U(2026, 9, 25, 0, 0, 5)) == "2026-09-23 03:56:05")
+    check("報價頁時間：空字串回空字串", _cboe.complete_timestamp("", U(2026, 9, 25, 0, 0, 5)) == "")
+
+    data = {"timestamp": "15:19:21", "symbol": "^SPX",
+            "data": {"symbol": "^SPX", "last_trade_time": "2026-09-24T11:04:19", "prev_day_close": 7706.0298,
+                     "options": [{"option": "SPXW260925C07700000", "bid": 30.1, "ask": 30.4},
+                                 {"option": "SPXW260925P07700000", "bid": 24.2, "ask": 24.5},
+                                 {"option": "SPXW260925C07710000", "bid": 25.0, "ask": 25.3}]}}
+    blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    html = ("<html><head><script>\n"
+            "        CTX.symbolBook = [{\"name\":\"A\",\"company_name\":\"x {y}\"}];\n"
+            f"        CTX.contextOptionsData = {blob};\n"
+            "        CTX.optionsOnFuturesSymbols = {\"ES\": 1};\n"
+            "</script></head><body>…</body></html>")
+    got = _cboe.page_payload(html, U(2026, 9, 24, 15, 19, 44))
+    check("報價頁：取出內嵌資料、選擇權筆數正確",
+          len(got.get("data", {}).get("options", [])) == 3 and got["data"]["prev_day_close"] == 7706.0298)
+    check("報價頁：timestamp 已補成完整日期",
+          got.get("timestamp") == "2026-09-24 15:19:21", str(got.get("timestamp")))
+    check("報價頁：標記後面接著別的 script 也照樣只解一個物件",
+          got.get("symbol") == "^SPX" and "optionsOnFuturesSymbols" not in got)
+    try:
+        _cboe.page_payload("<html><body>Service Unavailable</body></html>", U(2026, 9, 24, 15, 19, 44))
+        no_mark = False
+    except ValueError:
+        no_mark = True
+    check("報價頁：找不到 CTX.contextOptionsData → ValueError（頁面改版，結束碼 3）", no_mark)
+
+
+def session_field_tests():
+    """價格日不是買賣中價所屬的場次時，只准用 prev_close（build._session_price_field）。
+
+    2026/09/24 Run #88 在美股盤中（美東 13:58）執行，SPX 剛好接近前一日收盤，
+    「兩個都算、挑近的」選了盤中即時中價，做出「9/24 盤中報價＋9/23 未平倉」標成 9/23 的圖。
+    全部用寫死的數字與假的報價檔狀態，不讀 data/。
+    """
+    import build
+    import cboe as _cboe
+    tol = _cboe.FWD_TOL
+
+    def PK(field, pc, mid):
+        cand = {"prev_close": dict(zip(("fwd", "rel", "n_pairs"), pc)),
+                "mid": dict(zip(("fwd", "rel", "n_pairs"), mid))}
+        f = cand.get(field) if field else None
+        return {"field": field, "fwd": f["fwd"] if f else None, "rel": f["rel"] if f else None,
+                "n_pairs": f["n_pairs"] if f else 0, "candidates": cand}
+
+    M = (7702.30, -0.00048, 40)
+    Q53 = PK("mid", (7710.19, 0.00054, 40), M)              # 本案：盤中中價剛好比較近
+    FAR = PK("mid", (7760.0, 0.0070, 40), M)
+    FEW = PK("mid", (7707.0, 0.00013, 3), M)
+    NOPC = PK("mid", (None, None, 0), M)
+    PCB = PK("prev_close", (7710.19, 0.00054, 40), (7760.0, 0.0070, 40))
+    EIN = PK("mid", (7679.06, -0.0035, 40), M)              # 剛好等於容忍值 → 放行
+    EOUT = PK("mid", (7733.77, 0.0036, 40), M)
+    LIVE = {"opened": True, "session_over": False, "rolled": False}
+    AFTER_NR = {"opened": True, "session_over": True, "rolled": False}
+    ROLLED = {"opened": True, "session_over": True, "rolled": True}
+    PRE = {"opened": False, "session_over": False, "rolled": False}
+
+    for name, pick, st, use_prev, want in (
+            ("m1 盤中、中價比較近（本案）→ 改用 prev_close", Q53, LIVE, True, ("prev_close", True)),
+            ("m2 盤中、prev_close 偏太遠 → 不產出", FAR, LIVE, True, (None, True)),
+            ("m3 盤中、prev_close 對數太少 → 不產出", FEW, LIVE, True, (None, True)),
+            ("m4 盤中、prev_close 算不出來 → 不產出", NOPC, LIVE, True, (None, True)),
+            ("m5 盤中、本來就選 prev_close → 照舊", PCB, LIVE, True, ("prev_close", True)),
+            ("m6 盤中、prev_close 剛好等於容忍值 → 放行", EIN, LIVE, True, ("prev_close", True)),
+            ("m7 盤中、prev_close 超過容忍值 → 不產出", EOUT, LIVE, True, (None, True)),
+            ("m8 收盤後、prev_day_close 還沒換日 → 只用 prev_close", Q53, AFTER_NR, True, ("prev_close", True)),
+            ("m9 收盤後已換日（台北早班）→ 中價可用", Q53, ROLLED, True, ("mid", False)),
+            ("m10 新場次還沒開盤 → 中價仍是前一場次收盤、可用", Q53, PRE, True, ("mid", False)),
+            ("m11 --live-price（看盤中結構）→ 不限制", Q53, LIVE, False, ("mid", False))):
+        got = build._session_price_field(pick, st, use_prev, tol)
+        check(f"盤中只用 prev_close：{name}", got == want, f"得到 {got}")
+
+    S = lambda ts, ltt, close, pv, cur: {"timestamp": ts, "data": {
+        "last_trade_time": ltt, "close": close, "prev_day_close": pv, "current_price": cur}}
+    for name, payload, want in (
+            ("m12 真實狀態：本案（美東 13:58 盤中）",
+             S("2026-09-24 17:58:00", "2026-09-24T13:58:00", 7702.5, 7706.0298, 7702.5), ("prev_close", True)),
+            ("m13 真實狀態：收盤後已換日（台北早班）",
+             S("2026-09-25 04:30:00", "2026-09-24T16:15:00", 7700.0, 7700.0, 7700.0), ("mid", False)),
+            ("m14 真實狀態：收盤後、prev_day_close 還沒換日",
+             S("2026-09-24 20:05:00", "2026-09-24T16:00:00", 7700.0, 7706.0298, 7700.0), ("prev_close", True)),
+            ("m15 真實狀態：新場次開盤前（盤前成交）",
+             S("2026-09-25 12:15:00", "2026-09-25T08:15:00", None, 767.81, 768.2), ("mid", False))):
+        got = build._session_price_field(Q53, _cboe.snapshot_state(payload), True, tol)
+        check(f"盤中只用 prev_close：{name}", got == want, f"得到 {got}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv")
@@ -1021,6 +1129,10 @@ def main():
     occ_tests()
     print()
     us_stall_tests()
+    print()
+    quote_page_tests()
+    print()
+    session_field_tests()
     if a.csv:
         print()
         data_tests(a.csv, a.date)

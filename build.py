@@ -221,15 +221,83 @@ def _occ_contradiction(same, cboe_oi_day, oi_day) -> bool:
     return bool(same and cboe_oi_day and oi_day and cboe_oi_day != oi_day)
 
 
+def _session_price_field(pick, st, use_prev, tol):
+    """選擇權報價欄位的場次限制：價格日不是買賣中價所屬的場次時，只准用 prev_close。
+
+    買賣中價屬於 last_trade_time 那個場次（開盤後＝即時價、收盤後＝該場次收盤價），
+    而 load_us 在 rolled 為假時把價格日定為前一交易日——這時中價跟價格日必定不同場次。
+    cboe.pick_price_field「兩個都算、挑近的」只在指數偏離前收時才碰巧選對：
+    2026/09/24 Run #88（美東 13:58 盤中）SPX 剛好接近前一日收盤，選了盤中中價，
+    做出「9/24 盤中報價＋9/23 未平倉」標成 9/23 的圖，G1、G2 與對齊檢查都擋不到。
+    條件＝use_prev 且場次已開盤且沒有換日。台北早班（收盤後已換日，必須用 mid）與
+    新場次還沒開盤（中價仍是前一場次的收盤）都不受影響。
+    回傳 (欄位, 是否受限)；受限時 prev_close 不可用就回 (None, True)，由呼叫端擋下。
+    n_pairs ≥ 5 與 pick_price_field「樣本太少不採信」同一個門檻。
+    """
+    blocked = bool(use_prev and st.get("opened") and not st.get("rolled"))
+    if not blocked:
+        return pick.get("field"), False
+    c = (pick.get("candidates") or {}).get("prev_close") or {}
+    rel = c.get("rel")
+    ok = (c.get("fwd") is not None and (c.get("n_pairs") or 0) >= 5
+          and rel is not None and abs(rel) <= tol)
+    return ("prev_close" if ok else None), True
+
+
+def _page_payload(sym, cboe_sym):
+    """抓 Cboe 報價頁並取出內嵌資料（備援來源）。
+
+    連不上 → 結束碼 1（下一班再試可能就好）；格式看不懂 → 結束碼 3（頁面改版，重試沒有用）。
+    """
+    import cboe
+    try:
+        html = cboe.fetch_page(cboe_sym.lstrip("_").lower())
+    except (OSError, ValueError) as e:
+        _stop(f"{sym}: Cboe 報價頁連不上（{type(e).__name__}: {e}），先不要產出。\n"
+              f"    等下一班再跑即可。", 1)
+    try:
+        return cboe.page_payload(html, dt.datetime.utcnow())
+    except ValueError as e:
+        _stop(f"{sym}: Cboe 報價頁的格式看不懂（{e}），不產出。\n"
+              f"    多半是頁面改版了，重試沒有用，要改程式。", EXIT_STALE)
+
+
 def load_us(args, sym):
     import cboe
     import symbols as _sc
     spec0 = _sc.SPECS[sym]
-    payload = (cboe.read_json_file(args.json) if args.json
-               else cboe.fetch_json(spec0.get("cboe_symbol", sym)))
     hol = engine.load_holidays(os.path.join(HERE, spec0["calendar"]))
     prev = lambda d: engine.prev_trading_day(d, hol)
     session = args.date or (None if args.json else us_last_session(hol))
+    # 照日曆最近一個已收盤的交易日；下面判斷報價有沒有過期都拿它比
+    expected = args.date or us_last_session(hol)
+
+    # ── 報價從哪裡來：平常抓 CDN 檔，CDN 停更或連不上才改抓報價頁（每班每標的至多 1 次）──
+    # 2026/09/23 03:56 UTC 起 CDN 檔整個停更，Cboe 自己的報價頁照常更新、內嵌的是同一份資料。
+    # CDN 一恢復，下一班自動回到 CDN，不用人動。
+    quote_source = getattr(args, "quote_source", "auto")
+    cboe_sym = spec0.get("cboe_symbol", sym)
+    fell_back = False
+    if args.json:
+        payload, quote_source = cboe.read_json_file(args.json), "file"
+    elif quote_source == "page":
+        payload = _page_payload(sym, cboe_sym)
+    else:
+        try:
+            payload = cboe.fetch_json(cboe_sym)
+            why = None
+            cdn_sess = cboe.snapshot_state(payload)["sess"]
+            if cboe.quote_stale(cdn_sess, expected):
+                why = f"CDN 檔停在 {fmt_date(cdn_sess)}，照日曆應該是 {fmt_date(expected)}"
+        except (OSError, ValueError) as e:              # 連不上（urllib 的錯都是 OSError）或看不懂
+            if quote_source == "cdn":
+                raise
+            payload, why = None, f"CDN 檔連不上或看不懂（{type(e).__name__}: {e}）"
+        if why and quote_source == "auto":
+            print(f"  註：{sym}: {why}，改抓 Cboe 報價頁。", file=sys.stderr)
+            payload, quote_source, fell_back = _page_payload(sym, cboe_sym), "page", True
+        else:
+            quote_source = "cdn"
 
     # CBOE 這份檔案裡，價格是即時的、未平倉量是 OCC 隔天早上才更新的，兩者永遠差一個交易日。
     # 所以價格一律取每一檔的 prev_day_close（前一交易日收盤），這樣只要在
@@ -242,11 +310,11 @@ def load_us(args, sym):
     # 2026/09/23 03:56 UTC 起 CDN 檔整個停更、停在 9/22 收盤，9/24 那幾班照樣產出，
     # 把 9/22 的報價配上 OCC 9/23 的未平倉、標成 9/22。日曆上最近一個已收盤的交易日
     # 比檔案裡的場次還新，就是檔案停更了——重試沒有用，以結束碼 3 收場。
-    expected = args.date or us_last_session(hol)
     if cboe.quote_stale(sess, expected):
+        both = ("CDN 檔與報價頁都停在這一天，" if fell_back else "")
         msg = (f"{sym}: Cboe 報價停在 {fmt_date(sess)}，"
                f"照日曆最近一個已收盤的交易日是 {fmt_date(expected)}，不產出。\n"
-               f"    檔案時間 {payload.get('timestamp') or '不明'}（UTC）。來源停更，重試沒有用，"
+               f"    {both}檔案時間 {payload.get('timestamp') or '不明'}（UTC）。來源停更，重試沒有用，"
                f"等 Cboe 恢復或下一班再看。\n"
                f"    離線重跑舊檔請加 --date；要強行產出請加 --allow-stale-oi。")
         if not args.allow_stale_oi:
@@ -282,7 +350,29 @@ def load_us(args, sym):
                  f"買賣中價→遠期 {_fmt(pick['candidates']['mid'])}"
                  f" → 採用 {price_field or '（都不可信）'}")
     print("  " + pick_line, file=sys.stderr)
-    if price_field is None or abs(pick["rel"]) > cboe.FWD_TOL:
+    # 價格日不是買賣中價所屬的場次（盤中、或收盤後 prev_day_close 還沒換日）時只准用 prev_close。
+    # 2026/09/24 Run #88 在美股盤中執行，SPX 剛好接近前收，選了盤中中價；見 _session_price_field。
+    guarded, mid_blocked = _session_price_field(pick, st, use_prev, cboe.FWD_TOL)
+    if mid_blocked:
+        _pc = pick["candidates"]["prev_close"]
+        if guarded == "prev_close":
+            if price_field != "prev_close":
+                print(f"  註：{sym}: 場次 {fmt_date(sess)} 已開盤、價格日是 {fmt_date(price_day)}，"
+                      f"買賣中價屬於別的場次，不採用，改用 prev_close。", file=sys.stderr)
+                pick.update(field="prev_close", fwd=_pc["fwd"], rel=_pc["rel"], n_pairs=_pc["n_pairs"])
+                price_field = "prev_close"
+        else:
+            msg = (f"{sym}: 場次 {fmt_date(sess)} 已開盤、價格日是 {fmt_date(price_day)}，只能用 prev_close，"
+                   f"但 prev_close 反解的遠期對不上現貨，不產出。\n"
+                   f"    {pick_line}\n"
+                   f"    容忍值 {cboe.FWD_TOL*100:.2f}%。等美股收盤、prev_day_close 換日後的下一班再跑即可；"
+                   f"要強行產出請加 --allow-stale-oi。")
+            if not args.allow_stale_oi:
+                _stop(msg, 1)
+            print("  警告：" + msg, file=sys.stderr)
+            pick.update(field="prev_close", fwd=_pc["fwd"], rel=_pc["rel"], n_pairs=_pc["n_pairs"])
+            price_field = "prev_close"
+    if not mid_blocked and (price_field is None or abs(pick["rel"]) > cboe.FWD_TOL):
         msg = (f"{sym}: 兩個價格欄位反解出來的遠期都對不上現貨，不產出。\n"
                f"    {pick_line}\n"
                f"    容忍值 {cboe.FWD_TOL*100:.2f}%。這通常表示 CBOE 那份檔案停更、\n"
@@ -431,7 +521,8 @@ def load_us(args, sym):
              "fwd_check": meta.get("fwd_check"), "n_no_price": meta.get("n_no_price"),
              "oi_as_of": fmt_date(oi_day or price_day), "price_as_of": fmt_date(price_day),
              "oi_source": meta.get("oi_source"), "n_oi_lost": meta.get("n_oi_lost"),
-             "oi_day_basis": oi_day_basis}
+             "oi_day_basis": oi_day_basis, "quote_source": quote_source,
+             "mid_allowed": not mid_blocked}
     return day, chain, prev_oi, args.spot or meta["spot"], prior, extra
 
 
@@ -550,6 +641,9 @@ def main() -> int:
                          "比 CBOE 那份檔案早十幾個小時（跨週末 2.5 天）；價格仍取 CBOE")
     ap.add_argument("--occ-txt",
                     help="離線測試用：改讀存好的 series-search 純文字，不連 OCC")
+    ap.add_argument("--quote-source", choices=("auto", "cdn", "page"), default="auto",
+                    help="美股報價來源。auto ＝ 先抓 CDN 檔，停更或連不上才改抓 Cboe 報價頁（每次至多 1 次）；"
+                         "cdn ＝ 只抓 CDN 檔；page ＝ 直接抓報價頁（手動測試用）。--json 時不適用")
     args = ap.parse_args()
 
     sym = args.symbol
